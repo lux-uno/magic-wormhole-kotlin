@@ -10,16 +10,29 @@ internal typealias Fe = LongArray
 
 internal object Field {
     fun zero(): Fe = LongArray(16)
+
     fun one(): Fe = LongArray(16).also { it[0] = 1 }
+
     fun of(value: Int): Fe = LongArray(16).also { it[0] = value.toLong() }
 
     fun copy(a: Fe): Fe = a.copyOf()
 
-    fun add(a: Fe, b: Fe): Fe = LongArray(16) { a[it] + b[it] }
-    fun sub(a: Fe, b: Fe): Fe = LongArray(16) { a[it] - b[it] }
+    fun add(
+        a: Fe,
+        b: Fe,
+    ): Fe = LongArray(16) { a[it] + b[it] }
+
+    fun sub(
+        a: Fe,
+        b: Fe,
+    ): Fe = LongArray(16) { a[it] - b[it] }
+
     fun neg(a: Fe): Fe = sub(zero(), a)
 
-    fun mul(a: Fe, b: Fe): Fe {
+    fun mul(
+        a: Fe,
+        b: Fe,
+    ): Fe {
         val t = LongArray(31)
         for (i in 0 until 16) {
             val ai = a[i]
@@ -54,7 +67,10 @@ internal object Field {
     }
 
     /** a^e where e is a little-endian byte array. Not constant time; only used for constants. */
-    fun pow(a: Fe, exponent: ByteArray): Fe {
+    fun pow(
+        a: Fe,
+        exponent: ByteArray,
+    ): Fe {
         var result = one()
         for (bit in exponent.size * 8 - 1 downTo 0) {
             result = square(result)
@@ -71,7 +87,9 @@ internal object Field {
 
     fun pack(n: Fe): ByteArray {
         val t = copy(n)
-        carry(t); carry(t); carry(t)
+        carry(t)
+        carry(t)
+        carry(t)
         val m = LongArray(16)
         repeat(2) {
             m[0] = t[0] - 0xffed
@@ -92,8 +110,13 @@ internal object Field {
         return o
     }
 
-    fun equal(a: Fe, b: Fe): Boolean = pack(a).contentEquals(pack(b))
+    fun equal(
+        a: Fe,
+        b: Fe,
+    ): Boolean = pack(a).contentEquals(pack(b))
+
     fun isZero(a: Fe): Boolean = pack(a).all { it.toInt() == 0 }
+
     fun parity(a: Fe): Int = pack(a)[0].toInt() and 1
 
     private fun carry(o: Fe) {
@@ -106,7 +129,11 @@ internal object Field {
     }
 
     /** Swaps p and q when b == 1, in constant time. */
-    fun select(p: Fe, q: Fe, b: Int) {
+    fun select(
+        p: Fe,
+        q: Fe,
+        b: Int,
+    ) {
         val c = (b - 1).toLong().inv()
         for (i in 0 until 16) {
             val t = c and (p[i] xor q[i])
@@ -117,7 +144,9 @@ internal object Field {
 }
 
 /** A scalar modulo the group order L, stored as 32 little-endian bytes. */
-internal class Scalar private constructor(private val bytes: ByteArray) {
+internal class Scalar private constructor(
+    private val bytes: ByteArray,
+) {
     fun toBytes(): ByteArray = bytes.copyOf()
 
     /** Returns L - this (mod L). */
@@ -138,10 +167,41 @@ internal class Scalar private constructor(private val bytes: ByteArray) {
 
     companion object {
         /** L = 2^252 + 27742317777372353535851937790883648493, little-endian. */
-        val L_BYTES: ByteArray = longArrayOf(
-            0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10,
-        ).map { it.toByte() }.toByteArray()
+        val L_BYTES: ByteArray =
+            longArrayOf(
+                0xed,
+                0xd3,
+                0xf5,
+                0x5c,
+                0x1a,
+                0x63,
+                0x12,
+                0x58,
+                0xd6,
+                0x9c,
+                0xf7,
+                0xa2,
+                0xde,
+                0xf9,
+                0xde,
+                0x14,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0x10,
+            ).map { it.toByte() }.toByteArray()
 
         private val L = LongArray(32) { L_BYTES[it].toLong() and 0xff }
 
@@ -202,8 +262,12 @@ internal class Scalar private constructor(private val bytes: ByteArray) {
 }
 
 /** A point on edwards25519 in extended coordinates (X, Y, Z, T), with x = X/Z, y = Y/Z, xy = T/Z. */
-internal class EdPoint(val x: Fe, val y: Fe, val z: Fe, val t: Fe) {
-
+internal class EdPoint(
+    val x: Fe,
+    val y: Fe,
+    val z: Fe,
+    val t: Fe,
+) {
     /** Unified addition (add-2008-hwcd-3). Also correct for doubling and the identity. */
     operator fun plus(q: EdPoint): EdPoint {
         val a = Field.mul(Field.sub(y, x), Field.sub(q.y, q.x))
@@ -247,7 +311,11 @@ internal class EdPoint(val x: Fe, val y: Fe, val z: Fe, val t: Fe) {
 
     fun copy(): EdPoint = EdPoint(x.copyOf(), y.copyOf(), z.copyOf(), t.copyOf())
 
-    private fun swap(p: EdPoint, q: EdPoint, b: Int) {
+    private fun swap(
+        p: EdPoint,
+        q: EdPoint,
+        b: Int,
+    ) {
         Field.select(p.x, q.x, b)
         Field.select(p.y, q.y, b)
         Field.select(p.z, q.z, b)
@@ -261,20 +329,33 @@ internal object Ed25519 {
     val D2: Fe = Field.add(D, D)
 
     /** sqrt(-1) = 2^((p - 1) / 4). */
-    val SQRT_M1: Fe = Field.pow(
-        Field.of(2),
-        ByteArray(32) { if (it == 0) 0xfb.toByte() else if (it == 31) 0x1f else 0xff.toByte() },
-    )
+    val SQRT_M1: Fe =
+        Field.pow(
+            Field.of(2),
+            ByteArray(32) {
+                if (it == 0) {
+                    0xfb.toByte()
+                } else if (it == 31) {
+                    0x1f
+                } else {
+                    0xff.toByte()
+                }
+            },
+        )
 
     val IDENTITY: EdPoint = EdPoint(Field.zero(), Field.one(), Field.one(), Field.zero())
 
     /** The standard base point, with y = 4/5 and even x. */
-    val BASE: EdPoint = run {
-        val y = Field.mul(Field.of(4), Field.invert(Field.of(5)))
-        affine(recoverEvenX(y)!!, y)
-    }
+    val BASE: EdPoint =
+        run {
+            val y = Field.mul(Field.of(4), Field.invert(Field.of(5)))
+            affine(recoverEvenX(y)!!, y)
+        }
 
-    private fun affine(x: Fe, y: Fe) = EdPoint(x, y, Field.one(), Field.mul(x, y))
+    private fun affine(
+        x: Fe,
+        y: Fe,
+    ) = EdPoint(x, y, Field.one(), Field.mul(x, y))
 
     /** Returns the even x with (x, y) on the curve, or null when there is none. */
     private fun recoverEvenX(y: Fe): Fe? {

@@ -44,7 +44,10 @@ internal class Spake2Symmetric(
         return sha256(transcript)
     }
 
-    private fun sortedMessages(a: ByteArray, b: ByteArray): Pair<ByteArray, ByteArray> {
+    private fun sortedMessages(
+        a: ByteArray,
+        b: ByteArray,
+    ): Pair<ByteArray, ByteArray> {
         for (i in a.indices) {
             val x = a[i].toInt() and 0xff
             val y = b[i].toInt() and 0xff

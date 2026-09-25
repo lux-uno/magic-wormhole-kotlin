@@ -12,17 +12,22 @@ class MessagesTest {
 
     @Test
     fun clientMessagesSerializeToTheServerProtocol() {
-        val cases = mapOf(
-            ClientMessage.Bind("appid", "side1", listOf("kotlin", "0.1")) to
-                """{"type":"bind","appid":"appid","side":"side1","client_version":["kotlin","0.1"],"id":"0001"}""",
-            ClientMessage.Allocate to """{"type":"allocate","id":"0001"}""",
-            ClientMessage.Claim("4") to """{"type":"claim","nameplate":"4","id":"0001"}""",
-            ClientMessage.Release("4") to """{"type":"release","nameplate":"4","id":"0001"}""",
-            ClientMessage.Open("mb1") to """{"type":"open","mailbox":"mb1","id":"0001"}""",
-            ClientMessage.Add("pake", byteArrayOf(0x7b, 0x7d)) to """{"type":"add","phase":"pake","body":"7b7d","id":"0001"}""",
-            ClientMessage.Close("mb1", "happy") to """{"type":"close","mailbox":"mb1","mood":"happy","id":"0001"}""",
-            ClientMessage.Ping(3) to """{"type":"ping","ping":3,"id":"0001"}""",
-        )
+        val cases =
+            mapOf(
+                ClientMessage.Bind("appid", "side1", listOf("kotlin", "0.1")) to
+                    """{"type":"bind","appid":"appid","side":"side1","client_version":["kotlin","0.1"],"id":"0001"}""",
+                ClientMessage.Allocate to """{"type":"allocate","id":"0001"}""",
+                ClientMessage.Claim("4") to """{"type":"claim","nameplate":"4","id":"0001"}""",
+                ClientMessage.Release("4") to """{"type":"release","nameplate":"4","id":"0001"}""",
+                ClientMessage.Open("mb1") to """{"type":"open","mailbox":"mb1","id":"0001"}""",
+                ClientMessage.Add("pake", byteArrayOf(0x7b, 0x7d)) to
+                    """{"type":"add","phase":"pake","body":"7b7d","id":"0001"}""",
+                ClientMessage.Close(
+                    "mb1",
+                    "happy",
+                ) to """{"type":"close","mailbox":"mb1","mood":"happy","id":"0001"}""",
+                ClientMessage.Ping(3) to """{"type":"ping","ping":3,"id":"0001"}""",
+            )
         for ((message, expected) in cases) {
             assertEquals(json(expected), json(message.toJson("0001")), message.toString())
         }
@@ -57,9 +62,10 @@ class MessagesTest {
 
     @Test
     fun parsesMailboxMessage() {
-        val m = ServerMessage.parse(
-            """{"type":"message","side":"s1","phase":"pake","body":"7b7d","id":"77","server_rx":1.0,"server_tx":1.1}""",
-        )
+        val m =
+            ServerMessage.parse(
+                """{"type":"message","side":"s1","phase":"pake","body":"7b7d","id":"77","server_rx":1.0,"server_tx":1.1}""",
+            )
         assertIs<ServerMessage.Message>(m)
         assertEquals("s1", m.side)
         assertEquals("pake", m.phase)

@@ -6,10 +6,18 @@ import org.kotlincrypto.random.CryptoRand
 
 internal fun sha256(data: ByteArray): ByteArray = SHA256().digest(data)
 
-internal fun hmacSha256(key: ByteArray, data: ByteArray): ByteArray = HmacSHA256(key).doFinal(data)
+internal fun hmacSha256(
+    key: ByteArray,
+    data: ByteArray,
+): ByteArray = HmacSHA256(key).doFinal(data)
 
 /** HKDF-SHA256 (RFC 5869). An empty [salt] means a salt of 32 zero bytes. */
-internal fun hkdfSha256(ikm: ByteArray, salt: ByteArray, info: ByteArray, length: Int): ByteArray {
+internal fun hkdfSha256(
+    ikm: ByteArray,
+    salt: ByteArray,
+    info: ByteArray,
+    length: Int,
+): ByteArray {
     require(length in 0..255 * 32) { "HKDF length too large: $length" }
     val prk = hmacSha256(if (salt.isEmpty()) ByteArray(32) else salt, ikm)
     val okm = ByteArray(length)

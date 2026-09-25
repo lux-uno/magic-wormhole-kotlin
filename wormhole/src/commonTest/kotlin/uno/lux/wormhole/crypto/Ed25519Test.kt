@@ -13,19 +13,37 @@ class Ed25519Test {
     @Test
     fun scalarMultiplicationOfBase() {
         val scalar = Scalar.fromLong(12345)
-        assertEquals(Spake2Vectors.BASE_TIMES_12345, Ed25519.BASE.times(scalar).encode().toHexString())
+        assertEquals(
+            Spake2Vectors.BASE_TIMES_12345,
+            Ed25519.BASE
+                .times(scalar)
+                .encode()
+                .toHexString(),
+        )
     }
 
     @Test
     fun multiplyingByLMinusOneNegatesTheBase() {
         val lMinusOne = Scalar.fromLong(1).negate()
-        assertEquals(Spake2Vectors.BASE_TIMES_L_MINUS_1, Ed25519.BASE.times(lMinusOne).encode().toHexString())
+        assertEquals(
+            Spake2Vectors.BASE_TIMES_L_MINUS_1,
+            Ed25519.BASE
+                .times(lMinusOne)
+                .encode()
+                .toHexString(),
+        )
     }
 
     @Test
     fun addition() {
         val s = Ed25519.decodeElement(Spake2Vectors.S_ELEMENT.hexToByteArray())
-        assertEquals(Spake2Vectors.BASE_PLUS_S, Ed25519.BASE.plus(s).encode().toHexString())
+        assertEquals(
+            Spake2Vectors.BASE_PLUS_S,
+            Ed25519.BASE
+                .plus(s)
+                .encode()
+                .toHexString(),
+        )
     }
 
     @Test
@@ -36,7 +54,10 @@ class Ed25519Test {
 
     @Test
     fun arbitraryElementsMatchPython() {
-        assertEquals(Spake2Vectors.S_ELEMENT, Ed25519.arbitraryElement("symmetric".encodeToByteArray()).encode().toHexString())
+        assertEquals(
+            Spake2Vectors.S_ELEMENT,
+            Ed25519.arbitraryElement("symmetric".encodeToByteArray()).encode().toHexString(),
+        )
         assertEquals(Spake2Vectors.M_ELEMENT, Ed25519.arbitraryElement("M".encodeToByteArray()).encode().toHexString())
     }
 
@@ -61,7 +82,10 @@ class Ed25519Test {
 
     @Test
     fun passwordToScalarMatchesPython() {
-        assertEquals(Spake2Vectors.SCALAR_PW, Scalar.fromPassword("4-purple-sausages".encodeToByteArray()).toBytes().toHexString())
+        assertEquals(
+            Spake2Vectors.SCALAR_PW,
+            Scalar.fromPassword("4-purple-sausages".encodeToByteArray()).toBytes().toHexString(),
+        )
         assertEquals(Spake2Vectors.SCALAR_EMPTY, Scalar.fromPassword(ByteArray(0)).toBytes().toHexString())
     }
 

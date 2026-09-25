@@ -10,8 +10,10 @@ class Spake2Test {
     private val password = "4-purple-sausages".encodeToByteArray()
     private val appId = "lothar.com/wormhole/text-or-file-xfer".encodeToByteArray()
 
-    private fun spake(entropy: String, pw: ByteArray = password) =
-        Spake2Symmetric(pw, appId, random = { size -> entropy.hexToByteArray().copyOf(size) })
+    private fun spake(
+        entropy: String,
+        pw: ByteArray = password,
+    ) = Spake2Symmetric(pw, appId, random = { size -> entropy.hexToByteArray().copyOf(size) })
 
     @Test
     fun outboundMessagesMatchPython() {

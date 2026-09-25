@@ -29,6 +29,12 @@ The public API is small and documented; everything else is `internal` (`explicit
 Network access goes through small interfaces (`RendezvousTransport`, transit connection factory),
 so `commonTest` can run full transfers in memory.
 
+## Code style
+
+- ktlint (`ktlint_official`) via the `org.jlleitschuh.gradle.ktlint` plugin; rules in `.editorconfig`.
+- Run `./gradlew ktlintFormat` before committing; `./gradlew ktlintCheck` must pass.
+- Generated test-vector files may suppress `ktlint:standard:max-line-length`.
+
 ## Ported code
 
 Mention the origin at the top of a ported file (for example "Ported from TweetNaCl (public
@@ -41,4 +47,5 @@ domain)"). Add new sources to `THIRD_PARTY_NOTICES.md`.
 | JVM tests | `./gradlew jvmTest` |
 | Interop tests (needs `wormhole` CLI + internet) | `WORMHOLE_INTEROP=1 ./gradlew jvmTest` |
 | iOS simulator tests (macOS only) | `./gradlew iosSimulatorArm64Test` |
+| Lint (check / auto-fix) | `./gradlew ktlintCheck` / `./gradlew ktlintFormat` |
 | Publish to local Maven | `./gradlew publishToMavenLocal` |

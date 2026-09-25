@@ -50,9 +50,14 @@ public data class WormholeConfig(
 /** Progress of a send. */
 public sealed interface SendEvent {
     /** Give this code to the receiver. */
-    public data class CodeAllocated(val code: String) : SendEvent
+    public data class CodeAllocated(
+        val code: String,
+    ) : SendEvent
 
-    public data class Progress(val sentBytes: Long, val totalBytes: Long) : SendEvent
+    public data class Progress(
+        val sentBytes: Long,
+        val totalBytes: Long,
+    ) : SendEvent
 
     /** The receiver got everything. This is the last event. */
     public data object Completed : SendEvent
@@ -61,7 +66,9 @@ public sealed interface SendEvent {
 /** Progress of a receive. */
 public sealed interface ReceiveEvent {
     /** A text message arrived. This is the last event. */
-    public data class TextReceived(val text: String) : ReceiveEvent
+    public data class TextReceived(
+        val text: String,
+    ) : ReceiveEvent
 
     /**
      * The sender offers a file. Call [accept] or [reject]; the flow waits until you do.
@@ -86,7 +93,10 @@ public sealed interface ReceiveEvent {
         override fun toString(): String = "FileOffered(name=$name, size=$size, isDirectory=$isDirectory)"
     }
 
-    public data class Progress(val receivedBytes: Long, val totalBytes: Long) : ReceiveEvent
+    public data class Progress(
+        val receivedBytes: Long,
+        val totalBytes: Long,
+    ) : ReceiveEvent
 
     /** The whole file was received and verified. This is the last event. */
     public data object FileReceived : ReceiveEvent
@@ -107,92 +117,109 @@ public class Wormhole internal constructor(
     private val relay: DirectHint? = config.transitRelay?.let(DirectHint::parseRelayUrl)
 
     /** Sends [text]. Emits [SendEvent.CodeAllocated], then [SendEvent.Completed]. */
-    public fun sendText(text: String): Flow<SendEvent> = flow {
-        coroutineScope {
-            withSenderMailbox(this) { handle, session ->
-                session.send(buildJsonObject { put("offer", buildJsonObject { put("message", text) }) })
-                val answer = session.receive()
-                answer.throwIfPeerError()
-                val ack = (answer["answer"] as? JsonObject)?.stringValue("message_ack")
-                if (ack != "ok") throw WormholeProtocolException("Unexpected answer to a text offer: $answer")
-                handle.markHappy()
+    public fun sendText(text: String): Flow<SendEvent> =
+        flow {
+            coroutineScope {
+                withSenderMailbox(this) { handle, session ->
+                    session.send(buildJsonObject { put("offer", buildJsonObject { put("message", text) }) })
+                    val answer = session.receive()
+                    answer.throwIfPeerError()
+                    val ack = (answer["answer"] as? JsonObject)?.stringValue("message_ack")
+                    if (ack != "ok") throw WormholeProtocolException("Unexpected answer to a text offer: $answer")
+                    handle.markHappy()
+                }
+                emit(SendEvent.Completed)
             }
-            emit(SendEvent.Completed)
         }
-    }
 
     /**
      * Sends [size] bytes from [source] as a file called [name]. Emits
      * [SendEvent.CodeAllocated], [SendEvent.Progress] updates, then [SendEvent.Completed].
      * The library closes [source] when the transfer ends.
      */
-    public fun sendFile(name: String, size: Long, source: RawSource): Flow<SendEvent> = flow {
-        try {
+    public fun sendFile(
+        name: String,
+        size: Long,
+        source: RawSource,
+    ): Flow<SendEvent> =
+        flow {
+            try {
+                coroutineScope {
+                    withSenderMailbox(this) { handle, session ->
+                        val network = transitNetwork()
+                        try {
+                            FileTransfer.send(session, network, relay, name, size, source) { sent ->
+                                emit(SendEvent.Progress(sent, size))
+                            }
+                            handle.markHappy()
+                        } finally {
+                            network.close()
+                        }
+                    }
+                    emit(SendEvent.Completed)
+                }
+            } finally {
+                source.close()
+            }
+        }
+
+    /** Receives whatever the sender offers with [code]. */
+    public fun receive(code: String): Flow<ReceiveEvent> =
+        flow {
+            val nameplate = Codes.nameplateOf(code)
             coroutineScope {
-                withSenderMailbox(this) { handle, session ->
+                withMailbox(this, nameplate = nameplate, code = code) { handle, session ->
+                    val (offer, senderTransit) = receiveOffer(session)
+                    offer.stringValue("message")?.let { text ->
+                        session.send(buildJsonObject { put("answer", buildJsonObject { put("message_ack", "ok") }) })
+                        handle.markHappy()
+                        emit(ReceiveEvent.TextReceived(text))
+                        return@withMailbox
+                    }
+                    val file = offer["file"] as? JsonObject
+                    val directory = offer["directory"] as? JsonObject
+                    val (name, size) =
+                        when {
+                            file != null -> {
+                                file.stringValue("filename") to file.longValue("filesize")
+                            }
+
+                            directory != null -> {
+                                directory.stringValue("dirname")?.let { "$it.zip" } to
+                                    directory.longValue("zipsize")
+                            }
+
+                            else -> {
+                                null to null
+                            }
+                        }
+                    if (name == null || size == null || size < 0) {
+                        session.send(buildJsonObject { put("error", "unsupported offer") })
+                        throw WormholeProtocolException("Unsupported offer: $offer")
+                    }
+
+                    val decision = CompletableDeferred<RawSink?>()
+                    emit(ReceiveEvent.FileOffered(name, size, isDirectory = directory != null, decision))
+                    val sink = decision.await()
+                    if (sink == null) {
+                        session.send(buildJsonObject { put("error", "transfer rejected") })
+                        handle.markHappy()
+                        return@withMailbox
+                    }
                     val network = transitNetwork()
                     try {
-                        FileTransfer.send(session, network, relay, name, size, source) { sent ->
-                            emit(SendEvent.Progress(sent, size))
+                        FileTransfer.receive(session, network, relay, senderTransit, size, sink) { received ->
+                            emit(ReceiveEvent.Progress(received, size))
                         }
                         handle.markHappy()
                     } finally {
                         network.close()
+                        sink.close()
                     }
+                    emit(ReceiveEvent.FileReceived)
                 }
-                emit(SendEvent.Completed)
-            }
-        } finally {
-            source.close()
-        }
-    }
-
-    /** Receives whatever the sender offers with [code]. */
-    public fun receive(code: String): Flow<ReceiveEvent> = flow {
-        val nameplate = Codes.nameplateOf(code)
-        coroutineScope {
-            withMailbox(this, nameplate = nameplate, code = code) { handle, session ->
-                val (offer, senderTransit) = receiveOffer(session)
-                offer.stringValue("message")?.let { text ->
-                    session.send(buildJsonObject { put("answer", buildJsonObject { put("message_ack", "ok") }) })
-                    handle.markHappy()
-                    emit(ReceiveEvent.TextReceived(text))
-                    return@withMailbox
-                }
-                val file = offer["file"] as? JsonObject
-                val directory = offer["directory"] as? JsonObject
-                val (name, size) = when {
-                    file != null -> file.stringValue("filename") to file.longValue("filesize")
-                    directory != null -> directory.stringValue("dirname")?.let { "$it.zip" } to directory.longValue("zipsize")
-                    else -> null to null
-                }
-                if (name == null || size == null || size < 0) {
-                    session.send(buildJsonObject { put("error", "unsupported offer") })
-                    throw WormholeProtocolException("Unsupported offer: $offer")
-                }
-
-                val decision = CompletableDeferred<RawSink?>()
-                emit(ReceiveEvent.FileOffered(name, size, isDirectory = directory != null, decision))
-                val sink = decision.await()
-                if (sink == null) {
-                    session.send(buildJsonObject { put("error", "transfer rejected") })
-                    handle.markHappy()
-                    return@withMailbox
-                }
-                val network = transitNetwork()
-                try {
-                    FileTransfer.receive(session, network, relay, senderTransit, size, sink) { received ->
-                        emit(ReceiveEvent.Progress(received, size))
-                    }
-                    handle.markHappy()
-                } finally {
-                    network.close()
-                    sink.close()
-                }
-                emit(ReceiveEvent.FileReceived)
             }
         }
-    }
 
     /** Reads phases until the sender's offer arrives. Also returns the sender's transit hints. */
     private suspend fun receiveOffer(session: WormholeSession): Pair<JsonObject, TransitHints?> {
@@ -261,7 +288,11 @@ public class Wormhole internal constructor(
         }
     }
 
-    private suspend fun exchangeKeys(session: WormholeSession, code: String, handle: Handle) {
+    private suspend fun exchangeKeys(
+        session: WormholeSession,
+        code: String,
+        handle: Handle,
+    ) {
         try {
             session.exchangeKeys(code)
         } catch (e: WrongCodeException) {
@@ -270,7 +301,11 @@ public class Wormhole internal constructor(
         }
     }
 
-    private suspend fun closeClient(client: RendezvousClient, mailbox: String?, mood: String) {
+    private suspend fun closeClient(
+        client: RendezvousClient,
+        mailbox: String?,
+        mood: String,
+    ) {
         if (mailbox != null) client.close(mailbox, mood) else client.shutdown()
     }
 }

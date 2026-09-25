@@ -37,14 +37,22 @@ internal object FileTransfer {
         val transit = Transit(Transit.Role.SENDER, session.deriveKey(TRANSIT_KEY_PURPOSE), network, relay)
         try {
             session.send(buildJsonObject { put("transit", transit.start()) })
-            session.send(buildJsonObject {
-                put("offer", buildJsonObject {
-                    put("file", buildJsonObject {
-                        put("filename", name)
-                        put("filesize", size)
-                    })
-                })
-            })
+            session.send(
+                buildJsonObject {
+                    put(
+                        "offer",
+                        buildJsonObject {
+                            put(
+                                "file",
+                                buildJsonObject {
+                                    put("filename", name)
+                                    put("filesize", size)
+                                },
+                            )
+                        },
+                    )
+                },
+            )
 
             var peerHints = TransitHints(emptyList(), emptyList())
             while (true) {
@@ -79,7 +87,11 @@ internal object FileTransfer {
                 throttle.finish(sent)
 
                 val ack = parse(pipe.receive())
-                if (ack.stringValue("ack") != "ok") throw TransitException("The receiver did not confirm the file: $ack")
+                if (ack.stringValue("ack") !=
+                    "ok"
+                ) {
+                    throw TransitException("The receiver did not confirm the file: $ack")
+                }
                 val remoteHash = ack.stringValue("sha256")
                 if (remoteHash != null && remoteHash != hasher.digest().toHexString()) {
                     throw TransitException("The receiver got different data (SHA-256 mismatch)")
@@ -114,7 +126,11 @@ internal object FileTransfer {
                 var received = 0L
                 while (received < size) {
                     val record = pipe.receive()
-                    if (received + record.size > size) throw TransitException("The sender sent more data than announced")
+                    if (received + record.size >
+                        size
+                    ) {
+                        throw TransitException("The sender sent more data than announced")
+                    }
                     hasher.update(record)
                     buffer.write(record)
                     sink.write(buffer, buffer.size)
@@ -123,10 +139,11 @@ internal object FileTransfer {
                 }
                 sink.flush()
                 throttle.finish(received)
-                val ack = buildJsonObject {
-                    put("ack", "ok")
-                    put("sha256", hasher.digest().toHexString())
-                }
+                val ack =
+                    buildJsonObject {
+                        put("ack", "ok")
+                        put("sha256", hasher.digest().toHexString())
+                    }
                 pipe.send(ack.toString().encodeToByteArray())
             } finally {
                 pipe.close()
@@ -136,16 +153,19 @@ internal object FileTransfer {
         }
     }
 
-    private fun parse(bytes: ByteArray): JsonObject = try {
-        Json.parseToJsonElement(bytes.decodeToString()).jsonObject
-    } catch (e: SerializationException) {
-        throw WormholeProtocolException("Malformed transit message", e)
-    } catch (e: IllegalArgumentException) {
-        throw WormholeProtocolException("Malformed transit message", e)
-    }
+    private fun parse(bytes: ByteArray): JsonObject =
+        try {
+            Json.parseToJsonElement(bytes.decodeToString()).jsonObject
+        } catch (e: SerializationException) {
+            throw WormholeProtocolException("Malformed transit message", e)
+        } catch (e: IllegalArgumentException) {
+            throw WormholeProtocolException("Malformed transit message", e)
+        }
 
     /** Reports progress at most every [PROGRESS_INTERVAL], plus once at the end. */
-    private class ProgressThrottle(private val onProgress: suspend (Long) -> Unit) {
+    private class ProgressThrottle(
+        private val onProgress: suspend (Long) -> Unit,
+    ) {
         private var last = TimeSource.Monotonic.markNow()
         private var first = true
 

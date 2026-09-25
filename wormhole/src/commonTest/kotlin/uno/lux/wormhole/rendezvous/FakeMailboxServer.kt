@@ -26,10 +26,11 @@ internal class FakeMailboxServer(
 
     val transport: RendezvousTransport = RendezvousTransport { connect() }
 
-    private fun connect(): Connection = Connection().also { c ->
-        connections += c
-        c.push(ServerMessage.Welcome(motd = null, error = welcomeError))
-    }
+    private fun connect(): Connection =
+        Connection().also { c ->
+            connections += c
+            c.push(ServerMessage.Welcome(motd = null, error = welcomeError))
+        }
 
     /** Drops every open connection, like a network failure. */
     fun dropAllConnections() {
@@ -57,12 +58,16 @@ internal class FakeMailboxServer(
 
         private fun handle(message: ClientMessage) {
             when (message) {
-                is ClientMessage.Bind -> side = message.side
+                is ClientMessage.Bind -> {
+                    side = message.side
+                }
+
                 ClientMessage.Allocate -> {
                     val nameplate = (nextNameplate++).toString()
                     nameplateToMailbox[nameplate] = "mailbox$nameplate"
                     push(ServerMessage.Allocated(nameplate))
                 }
+
                 is ClientMessage.Claim -> {
                     val sides = nameplateSides.getOrPut(message.nameplate) { mutableSetOf() }
                     sides += side!!
@@ -73,22 +78,31 @@ internal class FakeMailboxServer(
                     val mailbox = nameplateToMailbox.getOrPut(message.nameplate) { "mailbox${message.nameplate}" }
                     push(ServerMessage.Claimed(mailbox))
                 }
-                is ClientMessage.Release -> push(ServerMessage.Released)
+
+                is ClientMessage.Release -> {
+                    push(ServerMessage.Released)
+                }
+
                 is ClientMessage.Open -> {
                     listeners.getOrPut(message.mailbox) { mutableListOf() } += this
                     mailboxes[message.mailbox]?.forEach(::push)
                 }
+
                 is ClientMessage.Add -> {
                     val mailbox = listeners.entries.first { this in it.value }.key
                     val m = ServerMessage.Message(side!!, message.phase, message.body)
                     mailboxes.getOrPut(mailbox) { mutableListOf() } += m
                     listeners[mailbox].orEmpty().forEach { it.push(m) }
                 }
+
                 is ClientMessage.Close -> {
                     listeners[message.mailbox]?.remove(this)
                     push(ServerMessage.Closed)
                 }
-                is ClientMessage.Ping -> push(ServerMessage.Pong(message.ping))
+
+                is ClientMessage.Ping -> {
+                    push(ServerMessage.Pong(message.ping))
+                }
             }
         }
 

@@ -26,17 +26,23 @@ import uno.lux.wormhole.crypto.randomBytes
 internal interface TransitSocket {
     val input: ByteReadChannel
     val output: ByteWriteChannel
+
     fun close()
 }
 
 internal interface TransitListener {
     val port: Int
+
     suspend fun accept(): TransitSocket
+
     fun close()
 }
 
 internal interface TransitNetwork {
-    suspend fun connect(host: String, port: Int): TransitSocket
+    suspend fun connect(
+        host: String,
+        port: Int,
+    ): TransitSocket
 
     /** Starts listening for direct connections, or returns null when this platform does not. */
     suspend fun listen(): TransitListener?
@@ -49,8 +55,10 @@ internal interface TransitNetwork {
 }
 
 internal object Handshakes {
-    private fun derive(key: ByteArray, purpose: String) =
-        hkdfSha256(key, ByteArray(0), purpose.encodeToByteArray(), 32)
+    private fun derive(
+        key: ByteArray,
+        purpose: String,
+    ) = hkdfSha256(key, ByteArray(0), purpose.encodeToByteArray(), 32)
 
     fun sender(key: ByteArray): ByteArray =
         "transit sender ${derive(key, "transit_sender").toHexString()} ready\n\n".encodeToByteArray()
@@ -58,10 +66,14 @@ internal object Handshakes {
     fun receiver(key: ByteArray): ByteArray =
         "transit receiver ${derive(key, "transit_receiver").toHexString()} ready\n\n".encodeToByteArray()
 
-    fun relay(key: ByteArray, side: String): ByteArray =
+    fun relay(
+        key: ByteArray,
+        side: String,
+    ): ByteArray =
         "please relay ${derive(key, "transit_relay_token").toHexString()} for side $side\n".encodeToByteArray()
 
     fun senderRecordKey(key: ByteArray) = derive(key, "transit_record_sender_key")
+
     fun receiverRecordKey(key: ByteArray) = derive(key, "transit_record_receiver_key")
 
     val GO = "go\n".encodeToByteArray()
@@ -96,18 +108,19 @@ internal class RecordPipe(
     }
 
     suspend fun receive(): ByteArray {
-        val encrypted = try {
-            val length = socket.input.readInt()
-            if (length < SecretBox.NONCE_SIZE + SecretBox.MAC_SIZE || length > MAX_RECORD_SIZE) {
-                throw TransitException("Invalid record length $length")
+        val encrypted =
+            try {
+                val length = socket.input.readInt()
+                if (length < SecretBox.NONCE_SIZE + SecretBox.MAC_SIZE || length > MAX_RECORD_SIZE) {
+                    throw TransitException("Invalid record length $length")
+                }
+                socket.input.readByteArray(length)
+            } catch (e: TransitException) {
+                throw e
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                throw TransitException("Connection to the other side was lost", e)
             }
-            socket.input.readByteArray(length)
-        } catch (e: TransitException) {
-            throw e
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            throw TransitException("Connection to the other side was lost", e)
-        }
         val nonce = encrypted.copyOfRange(0, SecretBox.NONCE_SIZE)
         if (!nonce.contentEquals(nonceBytes(receiveNonce))) {
             throw TransitException("Received an out-of-order record")
@@ -156,107 +169,145 @@ internal class Transit(
     private val relaySide = randomBytes(8).toHexString()
 
     suspend fun start(): kotlinx.serialization.json.JsonObject {
-        val l = try {
-            network.listen()
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            null
-        }
+        val l =
+            try {
+                network.listen()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                null
+            }
         listener = l
         val direct = if (l == null) emptyList() else network.localAddresses().map { DirectHint(it, l.port) }
         return TransitHints.toTransitMessage(direct, relay)
     }
 
-    suspend fun connect(peer: TransitHints): RecordPipe = coroutineScope {
-        val winner = CompletableDeferred<TransitSocket>()
-        val decision = Mutex()
-        val attempts = mutableListOf<Job>()
-        var lastError: Throwable? = null
+    suspend fun connect(peer: TransitHints): RecordPipe =
+        coroutineScope {
+            val winner = CompletableDeferred<TransitSocket>()
+            val decision = Mutex()
+            val attempts = mutableListOf<Job>()
+            var lastError: Throwable? = null
 
-        suspend fun attempt(open: suspend () -> TransitSocket, viaRelay: Boolean) {
-            var socket: TransitSocket? = null
-            try {
-                socket = open()
-                withTimeout(handshakeTimeoutMs) { handshake(socket, viaRelay) }
-                val won = when (role) {
-                    Role.SENDER -> decision.withLock {
-                        if (winner.isCompleted) {
-                            socket.output.writeFully(Handshakes.NEVERMIND); socket.output.flush()
-                            false
-                        } else {
-                            socket.output.writeFully(Handshakes.GO); socket.output.flush()
-                            winner.complete(socket)
+            suspend fun attempt(
+                open: suspend () -> TransitSocket,
+                viaRelay: Boolean,
+            ) {
+                var socket: TransitSocket? = null
+                try {
+                    socket = open()
+                    withTimeout(handshakeTimeoutMs) { handshake(socket, viaRelay) }
+                    val won =
+                        when (role) {
+                            Role.SENDER -> {
+                                decision.withLock {
+                                    if (winner.isCompleted) {
+                                        socket.output.writeFully(Handshakes.NEVERMIND)
+                                        socket.output.flush()
+                                        false
+                                    } else {
+                                        socket.output.writeFully(Handshakes.GO)
+                                        socket.output.flush()
+                                        winner.complete(socket)
+                                    }
+                                }
+                            }
+
+                            Role.RECEIVER -> {
+                                expect(socket.input, Handshakes.GO)
+                                decision.withLock { winner.complete(socket) }
+                            }
                         }
-                    }
-                    Role.RECEIVER -> {
-                        expect(socket.input, Handshakes.GO)
-                        decision.withLock { winner.complete(socket) }
-                    }
+                    if (!won) socket.close()
+                } catch (e: Throwable) {
+                    socket?.close()
+                    if (e is kotlinx.coroutines.CancellationException && !winner.isCompleted) throw e
+                    lastError = e
                 }
-                if (!won) socket.close()
-            } catch (e: Throwable) {
-                socket?.close()
-                if (e is kotlinx.coroutines.CancellationException && !winner.isCompleted) throw e
-                lastError = e
             }
-        }
 
-        listener?.let { l ->
+            listener?.let { l ->
+                launch {
+                    while (!winner.isCompleted) {
+                        val s =
+                            try {
+                                l.accept()
+                            } catch (e: Exception) {
+                                break
+                            }
+                        launch { attempt({ s }, viaRelay = false) }
+                    }
+                }
+            }
+            for (hint in peer.direct.distinct()) {
+                attempts += launch { attempt({ network.connect(hint.hostname, hint.port) }, viaRelay = false) }
+            }
+            val relays = (listOfNotNull(relay) + peer.relays).distinct()
+            for (hint in relays) {
+                attempts +=
+                    launch {
+                        if (peer.direct.isNotEmpty() || listener != null) delay(relayDelayMs)
+                        attempt({ network.connect(hint.hostname, hint.port) }, viaRelay = true)
+                    }
+            }
             launch {
-                while (!winner.isCompleted) {
-                    val s = try { l.accept() } catch (e: Exception) { break }
-                    launch { attempt({ s }, viaRelay = false) }
+                attempts.forEach { it.join() }
+                // With a listener the peer may still connect to us; give it the handshake timeout.
+                if (!winner.isCompleted && listener != null) delay(handshakeTimeoutMs)
+                winner.completeExceptionally(TransitException("Could not connect to the other side", lastError))
+            }
+            val socket =
+                try {
+                    winner.await()
+                } finally {
+                    listener?.close()
+                }
+            coroutineContext[Job]?.children?.forEach { it.cancel() }
+            when (role) {
+                Role.SENDER -> {
+                    RecordPipe(
+                        socket,
+                        Handshakes.senderRecordKey(transitKey),
+                        Handshakes.receiverRecordKey(transitKey),
+                    )
+                }
+
+                Role.RECEIVER -> {
+                    RecordPipe(
+                        socket,
+                        Handshakes.receiverRecordKey(transitKey),
+                        Handshakes.senderRecordKey(transitKey),
+                    )
                 }
             }
         }
-        for (hint in peer.direct.distinct()) {
-            attempts += launch { attempt({ network.connect(hint.hostname, hint.port) }, viaRelay = false) }
-        }
-        val relays = (listOfNotNull(relay) + peer.relays).distinct()
-        for (hint in relays) {
-            attempts += launch {
-                if (peer.direct.isNotEmpty() || listener != null) delay(relayDelayMs)
-                attempt({ network.connect(hint.hostname, hint.port) }, viaRelay = true)
-            }
-        }
-        launch {
-            attempts.forEach { it.join() }
-            // With a listener the peer may still connect to us; give it the handshake timeout.
-            if (!winner.isCompleted && listener != null) delay(handshakeTimeoutMs)
-            winner.completeExceptionally(TransitException("Could not connect to the other side", lastError))
-        }
-        val socket = try {
-            winner.await()
-        } finally {
-            listener?.close()
-        }
-        coroutineContext[Job]?.children?.forEach { it.cancel() }
-        when (role) {
-            Role.SENDER -> RecordPipe(socket, Handshakes.senderRecordKey(transitKey), Handshakes.receiverRecordKey(transitKey))
-            Role.RECEIVER -> RecordPipe(socket, Handshakes.receiverRecordKey(transitKey), Handshakes.senderRecordKey(transitKey))
-        }
-    }
 
     fun close() {
         listener?.close()
     }
 
-    private suspend fun handshake(socket: TransitSocket, viaRelay: Boolean) {
+    private suspend fun handshake(
+        socket: TransitSocket,
+        viaRelay: Boolean,
+    ) {
         if (viaRelay) {
             socket.output.writeFully(Handshakes.relay(transitKey, relaySide))
             socket.output.flush()
             expect(socket.input, Handshakes.RELAY_OK)
         }
-        val (mine, theirs) = when (role) {
-            Role.SENDER -> Handshakes.sender(transitKey) to Handshakes.receiver(transitKey)
-            Role.RECEIVER -> Handshakes.receiver(transitKey) to Handshakes.sender(transitKey)
-        }
+        val (mine, theirs) =
+            when (role) {
+                Role.SENDER -> Handshakes.sender(transitKey) to Handshakes.receiver(transitKey)
+                Role.RECEIVER -> Handshakes.receiver(transitKey) to Handshakes.sender(transitKey)
+            }
         socket.output.writeFully(mine)
         socket.output.flush()
         expect(socket.input, theirs)
     }
 
-    private suspend fun expect(input: ByteReadChannel, expected: ByteArray) {
+    private suspend fun expect(
+        input: ByteReadChannel,
+        expected: ByteArray,
+    ) {
         val got = input.readByteArray(expected.size)
         if (!got.contentEquals(expected)) throw TransitException("Bad transit handshake")
     }

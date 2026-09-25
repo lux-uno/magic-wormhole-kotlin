@@ -12,21 +12,24 @@ import kotlinx.coroutines.channels.produce
 internal expect fun createWebSocketHttpClient(): HttpClient
 
 /** [RendezvousTransport] over a Ktor WebSocket. Each connection owns its own [HttpClient]. */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 internal object WebSocketTransport : RendezvousTransport {
     override suspend fun connect(url: String): RendezvousConnection {
         val client = createWebSocketHttpClient()
-        val session = try {
-            client.webSocketSession(url)
-        } catch (e: Throwable) {
-            client.close()
-            throw e
-        }
-        return object : RendezvousConnection {
-            override val incoming: ReceiveChannel<String> = session.produce {
-                for (frame in session.incoming) {
-                    if (frame is Frame.Text) send(frame.readText())
-                }
+        val session =
+            try {
+                client.webSocketSession(url)
+            } catch (e: Throwable) {
+                client.close()
+                throw e
             }
+        return object : RendezvousConnection {
+            override val incoming: ReceiveChannel<String> =
+                session.produce {
+                    for (frame in session.incoming) {
+                        if (frame is Frame.Text) send(frame.readText())
+                    }
+                }
 
             override suspend fun send(text: String) = session.send(Frame.Text(text))
 

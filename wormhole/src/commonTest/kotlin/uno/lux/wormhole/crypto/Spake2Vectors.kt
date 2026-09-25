@@ -1,3 +1,5 @@
+@file:Suppress("ktlint:standard:max-line-length") // Generated test vectors.
+
 package uno.lux.wormhole.crypto
 
 // Generated with python-spake2 0.9 (spake2.SPAKE2_Symmetric, Ed25519 parameters).

@@ -24,8 +24,10 @@ internal expect val canListenForDirectConnections: Boolean
 internal class TcpTransitNetwork : TransitNetwork {
     private val selector = SelectorManager(transitDispatcher)
 
-    override suspend fun connect(host: String, port: Int): TransitSocket =
-        TcpSocket(aSocket(selector).tcp().connect(host, port))
+    override suspend fun connect(
+        host: String,
+        port: Int,
+    ): TransitSocket = TcpSocket(aSocket(selector).tcp().connect(host, port))
 
     override suspend fun listen(): TransitListener? {
         if (!canListenForDirectConnections) return null
@@ -37,15 +39,22 @@ internal class TcpTransitNetwork : TransitNetwork {
 
     override fun close() = selector.close()
 
-    private class TcpSocket(private val socket: Socket) : TransitSocket {
+    private class TcpSocket(
+        private val socket: Socket,
+    ) : TransitSocket {
         override val input: ByteReadChannel = socket.openReadChannel()
         override val output: ByteWriteChannel = socket.openWriteChannel(autoFlush = false)
+
         override fun close() = socket.close()
     }
 
-    private class TcpListener(private val server: ServerSocket) : TransitListener {
+    private class TcpListener(
+        private val server: ServerSocket,
+    ) : TransitListener {
         override val port: Int = (server.localAddress as InetSocketAddress).port
+
         override suspend fun accept(): TransitSocket = TcpSocket(server.accept())
+
         override fun close() = server.close()
     }
 }

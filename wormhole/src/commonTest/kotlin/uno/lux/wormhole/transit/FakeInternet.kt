@@ -13,7 +13,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 
 /** An in-memory "internet" with TCP-like sockets and a transit relay, for tests. */
-internal class FakeInternet(private val scope: CoroutineScope) {
+internal class FakeInternet(
+    private val scope: CoroutineScope,
+) {
     private val listeners = mutableMapOf<String, FakeListener>()
     private var nextPort = 40000
     private val waitingForPeer = mutableMapOf<String, Pair<String, FakeSocket>>()
@@ -21,12 +23,19 @@ internal class FakeInternet(private val scope: CoroutineScope) {
     /** Every host:port that somebody tried to connect to. */
     val connectAttempts = mutableListOf<String>()
 
-    fun network(addresses: List<String>, canListen: Boolean = true): TransitNetwork =
+    fun network(
+        addresses: List<String>,
+        canListen: Boolean = true,
+    ): TransitNetwork =
         object : TransitNetwork {
-            override suspend fun connect(host: String, port: Int): TransitSocket {
+            override suspend fun connect(
+                host: String,
+                port: Int,
+            ): TransitSocket {
                 connectAttempts += "$host:$port"
                 if (host == RELAY_HOST && port == RELAY_PORT) return connectToRelay()
-                val listener = listeners["$host:$port"] ?: throw IllegalStateException("Connection refused: $host:$port")
+                val listener =
+                    listeners["$host:$port"] ?: throw IllegalStateException("Connection refused: $host:$port")
                 val (client, server) = socketPair()
                 listener.pending.send(server)
                 return client
@@ -48,7 +57,11 @@ internal class FakeInternet(private val scope: CoroutineScope) {
         scope.launch {
             val line = StringBuilder()
             while (true) {
-                val b = relaySide.input.readByte().toInt().toChar()
+                val b =
+                    relaySide.input
+                        .readByte()
+                        .toInt()
+                        .toChar()
                 if (b == '\n') break
                 line.append(b)
             }
@@ -63,23 +76,32 @@ internal class FakeInternet(private val scope: CoroutineScope) {
             }
             waitingForPeer.remove(token)
             val peer = other.second
-            relaySide.output.writeFully("ok\n".encodeToByteArray()); relaySide.output.flush()
-            peer.output.writeFully("ok\n".encodeToByteArray()); peer.output.flush()
+            relaySide.output.writeFully("ok\n".encodeToByteArray())
+            relaySide.output.flush()
+            peer.output.writeFully("ok\n".encodeToByteArray())
+            peer.output.flush()
             launch { pipe(relaySide.input, peer.output) }
             launch { pipe(peer.input, relaySide.output) }
         }
         return client
     }
 
-    private class FakeListener(override val port: Int) : TransitListener {
+    private class FakeListener(
+        override val port: Int,
+    ) : TransitListener {
         val pending = Channel<TransitSocket>(Channel.UNLIMITED)
+
         override suspend fun accept(): TransitSocket = pending.receive()
+
         override fun close() {
             pending.close()
         }
     }
 
-    class FakeSocket(override val input: ByteReadChannel, override val output: ByteWriteChannel) : TransitSocket {
+    class FakeSocket(
+        override val input: ByteReadChannel,
+        override val output: ByteWriteChannel,
+    ) : TransitSocket {
         override fun close() {
             input.cancel()
             output.close(null)
@@ -100,7 +122,10 @@ internal class FakeInternet(private val scope: CoroutineScope) {
 }
 
 /** Copies until either side closes, like a relay forwarding TCP traffic. */
-private suspend fun pipe(from: ByteReadChannel, to: ByteWriteChannel) {
+private suspend fun pipe(
+    from: ByteReadChannel,
+    to: ByteWriteChannel,
+) {
     try {
         from.copyTo(to)
         to.flush()

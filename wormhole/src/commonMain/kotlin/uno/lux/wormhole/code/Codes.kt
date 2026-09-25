@@ -7,7 +7,10 @@ internal object Codes {
     private val codePattern = Regex("""^(\d+)-[^\s-]\S*$""")
 
     /** Chooses [count] words, alternating odd and even PGP lists (like magic-wormhole). */
-    fun generateWords(count: Int, random: (Int) -> ByteArray = ::randomBytes): String {
+    fun generateWords(
+        count: Int,
+        random: (Int) -> ByteArray = ::randomBytes,
+    ): String {
         require(count >= 1) { "A code needs at least one word" }
         val bytes = random(count)
         return (0 until count).joinToString("-") { i ->
@@ -16,8 +19,11 @@ internal object Codes {
         }
     }
 
-    fun build(nameplate: String, wordCount: Int, random: (Int) -> ByteArray = ::randomBytes): String =
-        "$nameplate-${generateWords(wordCount, random)}"
+    fun build(
+        nameplate: String,
+        wordCount: Int,
+        random: (Int) -> ByteArray = ::randomBytes,
+    ): String = "$nameplate-${generateWords(wordCount, random)}"
 
     /** Returns the nameplate of [code], or throws [InvalidCodeException]. */
     fun nameplateOf(code: String): String {

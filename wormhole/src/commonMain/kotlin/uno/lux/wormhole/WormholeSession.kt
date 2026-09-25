@@ -36,18 +36,20 @@ internal class WormholeSession(
         val pakeBody = buildJsonObject { put("pake_v1", spake.start().toHexString()) }
         client.add("pake", pakeBody.toString().encodeToByteArray())
 
-        val peerPake = try {
-            val payload = parseJson(receivePhase("pake"))
-            (payload["pake_v1"] as JsonPrimitive).content.hexToByteArray()
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            throw WormholeProtocolException("Malformed PAKE message from the other side", e)
-        }
-        val sharedKey = try {
-            spake.finish(peerPake)
-        } catch (e: IllegalArgumentException) {
-            throw WormholeProtocolException("Invalid PAKE message from the other side", e)
-        }
+        val peerPake =
+            try {
+                val payload = parseJson(receivePhase("pake"))
+                (payload["pake_v1"] as JsonPrimitive).content.hexToByteArray()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                throw WormholeProtocolException("Malformed PAKE message from the other side", e)
+            }
+        val sharedKey =
+            try {
+                spake.finish(peerPake)
+            } catch (e: IllegalArgumentException) {
+                throw WormholeProtocolException("Invalid PAKE message from the other side", e)
+            }
         key = sharedKey
 
         val versions = buildJsonObject { put("app_versions", buildJsonObject { }) }
@@ -61,8 +63,10 @@ internal class WormholeSession(
         }
     }
 
-    fun deriveKey(purpose: String, length: Int = SecretBox.KEY_SIZE): ByteArray =
-        hkdfSha256(requireKey(), ByteArray(0), purpose.encodeToByteArray(), length)
+    fun deriveKey(
+        purpose: String,
+        length: Int = SecretBox.KEY_SIZE,
+    ): ByteArray = hkdfSha256(requireKey(), ByteArray(0), purpose.encodeToByteArray(), length)
 
     internal fun keyForTests(): ByteArray = requireKey()
 
@@ -76,11 +80,12 @@ internal class WormholeSession(
     suspend fun receive(): JsonObject {
         val phase = (nextInboundPhase++).toString()
         val (side, body) = receiveMessage(phase)
-        val plaintext = try {
-            decrypt(side, phase, body)
-        } catch (e: DecryptionException) {
-            throw WormholeProtocolException("Could not decrypt message $phase from the other side", e)
-        }
+        val plaintext =
+            try {
+                decrypt(side, phase, body)
+            } catch (e: DecryptionException) {
+                throw WormholeProtocolException("Could not decrypt message $phase from the other side", e)
+            }
         return parseJson(plaintext)
     }
 
@@ -100,18 +105,30 @@ internal class WormholeSession(
         return sides.remove(phase)!! to buffered.remove(phase)!!
     }
 
-    private fun phaseKey(side: String, phase: String): ByteArray {
-        val purpose = "wormhole:phase:".encodeToByteArray() +
-            sha256(side.encodeToByteArray()) + sha256(phase.encodeToByteArray())
+    private fun phaseKey(
+        side: String,
+        phase: String,
+    ): ByteArray {
+        val purpose =
+            "wormhole:phase:".encodeToByteArray() +
+                sha256(side.encodeToByteArray()) + sha256(phase.encodeToByteArray())
         return hkdfSha256(requireKey(), ByteArray(0), purpose, SecretBox.KEY_SIZE)
     }
 
-    private fun encrypt(side: String, phase: String, plaintext: ByteArray): ByteArray {
+    private fun encrypt(
+        side: String,
+        phase: String,
+        plaintext: ByteArray,
+    ): ByteArray {
         val nonce = randomBytes(SecretBox.NONCE_SIZE)
         return nonce + SecretBox.seal(plaintext, nonce, phaseKey(side, phase))
     }
 
-    private fun decrypt(side: String, phase: String, body: ByteArray): ByteArray {
+    private fun decrypt(
+        side: String,
+        phase: String,
+        body: ByteArray,
+    ): ByteArray {
         if (body.size < SecretBox.NONCE_SIZE + SecretBox.MAC_SIZE) throw DecryptionException("Message too short")
         return SecretBox.open(
             body.copyOfRange(SecretBox.NONCE_SIZE, body.size),
@@ -122,11 +139,12 @@ internal class WormholeSession(
 
     private fun requireKey(): ByteArray = checkNotNull(key) { "Keys have not been exchanged yet" }
 
-    private fun parseJson(bytes: ByteArray): JsonObject = try {
-        Json.parseToJsonElement(bytes.decodeToString()).jsonObject
-    } catch (e: SerializationException) {
-        throw WormholeProtocolException("Malformed message from the other side", e)
-    } catch (e: IllegalArgumentException) {
-        throw WormholeProtocolException("Malformed message from the other side", e)
-    }
+    private fun parseJson(bytes: ByteArray): JsonObject =
+        try {
+            Json.parseToJsonElement(bytes.decodeToString()).jsonObject
+        } catch (e: SerializationException) {
+            throw WormholeProtocolException("Malformed message from the other side", e)
+        } catch (e: IllegalArgumentException) {
+            throw WormholeProtocolException("Malformed message from the other side", e)
+        }
 }

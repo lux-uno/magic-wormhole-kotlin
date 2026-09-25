@@ -11,13 +11,17 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 
 /** A TCP endpoint. */
-internal data class DirectHint(val hostname: String, val port: Int) {
-    fun toJson(): JsonObject = buildJsonObject {
-        put("type", "direct-tcp-v1")
-        put("priority", 0.0)
-        put("hostname", hostname)
-        put("port", port)
-    }
+internal data class DirectHint(
+    val hostname: String,
+    val port: Int,
+) {
+    fun toJson(): JsonObject =
+        buildJsonObject {
+            put("type", "direct-tcp-v1")
+            put("priority", 0.0)
+            put("hostname", hostname)
+            put("port", port)
+        }
 
     companion object {
         /** Parses `tcp:host:port`, the format of `--transit-helper`. */
@@ -38,7 +42,10 @@ internal data class DirectHint(val hostname: String, val port: Int) {
 }
 
 /** Where the other side can be reached. */
-internal data class TransitHints(val direct: List<DirectHint>, val relays: List<DirectHint>) {
+internal data class TransitHints(
+    val direct: List<DirectHint>,
+    val relays: List<DirectHint>,
+) {
     companion object {
         /** Parses the value of a `{"transit": ...}` message. Unknown hint types are ignored. */
         fun parse(transit: JsonObject): TransitHints {
@@ -47,30 +54,48 @@ internal data class TransitHints(val direct: List<DirectHint>, val relays: List<
             for (hint in (transit["hints-v1"] as? JsonArray).orEmpty()) {
                 val o = hint as? JsonObject ?: continue
                 when (o.string("type")) {
-                    "direct-tcp-v1" -> DirectHint.fromJson(o)?.let(direct::add)
-                    "relay-v1" -> (o["hints"] as? JsonArray).orEmpty()
-                        .mapNotNull { (it as? JsonObject)?.let(DirectHint::fromJson) }
-                        .let(relays::addAll)
+                    "direct-tcp-v1" -> {
+                        DirectHint.fromJson(o)?.let(direct::add)
+                    }
+
+                    "relay-v1" -> {
+                        (o["hints"] as? JsonArray)
+                            .orEmpty()
+                            .mapNotNull { (it as? JsonObject)?.let(DirectHint::fromJson) }
+                            .let(relays::addAll)
+                    }
                 }
             }
             return TransitHints(direct, relays)
         }
 
-        fun toTransitMessage(direct: List<DirectHint>, relay: DirectHint?): JsonObject = buildJsonObject {
-            put("abilities-v1", buildJsonArray {
-                add(buildJsonObject { put("type", "direct-tcp-v1") })
-                add(buildJsonObject { put("type", "relay-v1") })
-            })
-            put("hints-v1", buildJsonArray {
-                direct.forEach { add(it.toJson()) }
-                if (relay != null) {
-                    add(buildJsonObject {
-                        put("type", "relay-v1")
-                        put("hints", buildJsonArray { add(relay.toJson()) })
-                    })
-                }
-            })
-        }
+        fun toTransitMessage(
+            direct: List<DirectHint>,
+            relay: DirectHint?,
+        ): JsonObject =
+            buildJsonObject {
+                put(
+                    "abilities-v1",
+                    buildJsonArray {
+                        add(buildJsonObject { put("type", "direct-tcp-v1") })
+                        add(buildJsonObject { put("type", "relay-v1") })
+                    },
+                )
+                put(
+                    "hints-v1",
+                    buildJsonArray {
+                        direct.forEach { add(it.toJson()) }
+                        if (relay != null) {
+                            add(
+                                buildJsonObject {
+                                    put("type", "relay-v1")
+                                    put("hints", buildJsonArray { add(relay.toJson()) })
+                                },
+                            )
+                        }
+                    },
+                )
+            }
     }
 }
 

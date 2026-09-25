@@ -19,7 +19,9 @@ import uno.lux.wormhole.crypto.randomBytes
 internal interface RendezvousConnection {
     /** Messages from the server. Closed when the connection ends. */
     val incoming: ReceiveChannel<String>
+
     suspend fun send(text: String)
+
     suspend fun close()
 }
 
@@ -49,21 +51,33 @@ internal class RendezvousClient private constructor(
         try {
             for (text in connection.incoming) {
                 when (val m = ServerMessage.parse(text)) {
-                    is ServerMessage.Welcome -> welcome.complete(m)
-                    is ServerMessage.Message -> if (m.side != side) messages.send(m)
+                    is ServerMessage.Welcome -> {
+                        welcome.complete(m)
+                    }
+
+                    is ServerMessage.Message -> {
+                        if (m.side != side) messages.send(m)
+                    }
+
                     is ServerMessage.Error -> {
                         failure = WormholeServerException(m.error)
                         break
                     }
-                    ServerMessage.Ack, is ServerMessage.Pong, is ServerMessage.Unknown -> Unit
-                    else -> replies.send(m)
+
+                    ServerMessage.Ack, is ServerMessage.Pong, is ServerMessage.Unknown -> {}
+
+                    else -> {
+                        replies.send(m)
+                    }
                 }
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             failure = ServerConnectionException("Connection to the wormhole server failed", e)
         }
-        val error = failure ?: if (shuttingDown) null else ServerConnectionException("Connection to the wormhole server was lost")
+        val error =
+            failure
+                ?: if (shuttingDown) null else ServerConnectionException("Connection to the wormhole server was lost")
         welcome.completeExceptionally(error ?: ServerConnectionException("Connection closed"))
         replies.close(error)
         messages.close(error)
@@ -91,11 +105,12 @@ internal class RendezvousClient private constructor(
 
     /** Waits for the server's welcome and binds this side to [appId]. */
     suspend fun bind() {
-        val w = try {
-            welcome.await()
-        } catch (e: ClosedReceiveChannelException) {
-            throw ServerConnectionException("Connection to the wormhole server was lost", e)
-        }
+        val w =
+            try {
+                welcome.await()
+            } catch (e: ClosedReceiveChannelException) {
+                throw ServerConnectionException("Connection to the wormhole server was lost", e)
+            }
         w.error?.let { throw WormholeServerException(it) }
         send(ClientMessage.Bind(appId, side, CLIENT_VERSION))
     }
@@ -112,14 +127,18 @@ internal class RendezvousClient private constructor(
 
     suspend fun open(mailbox: String) = send(ClientMessage.Open(mailbox))
 
-    suspend fun add(phase: String, body: ByteArray) = send(ClientMessage.Add(phase, body))
+    suspend fun add(
+        phase: String,
+        body: ByteArray,
+    ) = send(ClientMessage.Add(phase, body))
 
     /** Returns the next mailbox message from the other side. */
-    suspend fun receive(): ServerMessage.Message = try {
-        messages.receive()
-    } catch (e: ClosedReceiveChannelException) {
-        throw ServerConnectionException("Connection to the wormhole server was lost", e)
-    }
+    suspend fun receive(): ServerMessage.Message =
+        try {
+            messages.receive()
+        } catch (e: ClosedReceiveChannelException) {
+            throw ServerConnectionException("Connection to the wormhole server was lost", e)
+        }
 
     suspend fun release(nameplate: String) {
         send(ClientMessage.Release(nameplate))
@@ -127,7 +146,10 @@ internal class RendezvousClient private constructor(
     }
 
     /** Closes the mailbox with [mood] and then the connection. Best effort; never throws. */
-    suspend fun close(mailbox: String, mood: String) {
+    suspend fun close(
+        mailbox: String,
+        mood: String,
+    ) {
         withContext(NonCancellable) {
             try {
                 send(ClientMessage.Close(mailbox, mood))
@@ -160,12 +182,13 @@ internal class RendezvousClient private constructor(
             appId: String,
             scope: CoroutineScope,
         ): RendezvousClient {
-            val connection = try {
-                transport.connect(url)
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                throw ServerConnectionException("Could not connect to the wormhole server at $url", e)
-            }
+            val connection =
+                try {
+                    transport.connect(url)
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    throw ServerConnectionException("Could not connect to the wormhole server at $url", e)
+                }
             return RendezvousClient(connection, appId, scope)
         }
     }
