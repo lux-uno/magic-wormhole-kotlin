@@ -6,7 +6,7 @@ plugins {
     alias(libs.plugins.mavenPublish)
 }
 
-// Needed so that composite builds (includeBuild) can substitute io.github.anima-lux-uno:wormhole.
+// Needed so that composite builds (includeBuild) can substitute io.github.lux-uno:wormhole.
 group = property("GROUP").toString()
 version = property("VERSION_NAME").toString()
 
@@ -70,7 +70,7 @@ mavenPublishing {
         name = "wormhole-kotlin"
         description = "A Kotlin Multiplatform implementation of the Magic Wormhole protocol."
         inceptionYear = "2026"
-        url = "https://github.com/anima-lux-uno/wormhole-kotlin"
+        url = "https://github.com/lux-uno/wormhole-kotlin"
         licenses {
             license {
                 name = "MIT License"
@@ -86,9 +86,9 @@ mavenPublishing {
             }
         }
         scm {
-            url = "https://github.com/anima-lux-uno/wormhole-kotlin"
-            connection = "scm:git:git://github.com/anima-lux-uno/wormhole-kotlin.git"
-            developerConnection = "scm:git:ssh://git@github.com/anima-lux-uno/wormhole-kotlin.git"
+            url = "https://github.com/lux-uno/wormhole-kotlin"
+            connection = "scm:git:git://github.com/lux-uno/wormhole-kotlin.git"
+            developerConnection = "scm:git:ssh://git@github.com/lux-uno/wormhole-kotlin.git"
         }
     }
     // Maven Central upload and signing are enabled when the credentials exist:

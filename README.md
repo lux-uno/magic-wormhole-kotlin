@@ -56,7 +56,7 @@ After the first release:
 
 ```kotlin
 dependencies {
-    implementation("io.github.anima-lux-uno:wormhole:<version>")
+    implementation("io.github.lux-uno:wormhole:<version>")
 }
 ```
 
