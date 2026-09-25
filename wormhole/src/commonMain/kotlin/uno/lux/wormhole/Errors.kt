@@ -24,6 +24,9 @@ public class PeerErrorException(public val peerMessage: String) :
 public class WormholeProtocolException(message: String, cause: Throwable? = null) :
     WormholeException(message, cause)
 
+/** The data connection (direct or through the transit relay) failed. */
+public class TransitException(message: String, cause: Throwable? = null) : WormholeException(message, cause)
+
 /** The mailbox server could not be reached, or the connection was lost. */
 public class ServerConnectionException(message: String, cause: Throwable? = null) :
     WormholeException(message, cause)
