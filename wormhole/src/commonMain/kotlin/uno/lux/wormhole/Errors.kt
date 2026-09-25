@@ -13,6 +13,13 @@ public class WormholeServerException(public val serverError: String) :
 /** The two sides used different codes, so the keys do not match. */
 public class WrongCodeException : WormholeException("The wormhole code is wrong (the keys do not match)")
 
+/** The receiver declined the transfer. */
+public class TransferRejectedException : WormholeException("The receiver rejected the transfer")
+
+/** The other side stopped with an error message. */
+public class PeerErrorException(public val peerMessage: String) :
+    WormholeException("The other side reported an error: $peerMessage")
+
 /** The other side sent something that does not follow the protocol. */
 public class WormholeProtocolException(message: String, cause: Throwable? = null) :
     WormholeException(message, cause)
