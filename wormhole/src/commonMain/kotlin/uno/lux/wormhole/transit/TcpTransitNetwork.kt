@@ -35,7 +35,7 @@ internal class TcpTransitNetwork : TransitNetwork {
 
     override fun localAddresses(): List<String> = localIpAddresses()
 
-    fun close() = selector.close()
+    override fun close() = selector.close()
 
     private class TcpSocket(private val socket: Socket) : TransitSocket {
         override val input: ByteReadChannel = socket.openReadChannel()

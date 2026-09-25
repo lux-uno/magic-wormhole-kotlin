@@ -43,6 +43,9 @@ internal interface TransitNetwork {
 
     /** IP addresses to advertise in direct hints. */
     fun localAddresses(): List<String>
+
+    /** Releases resources after the transfer. */
+    fun close() {}
 }
 
 internal object Handshakes {

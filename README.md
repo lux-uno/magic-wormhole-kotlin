@@ -13,10 +13,14 @@ Compatible with the Python `wormhole` CLI and [wormhole-william](https://github.
 
 ## Usage
 
-```kotlin
-val wormhole = Wormhole(WormholeConfig())
+Every operation returns a cold `Flow`. The transfer runs while you collect it; cancel the
+collecting coroutine to cancel the transfer. Errors are `WormholeException` subclasses
+(`WrongCodeException`, `TransferRejectedException`, `ServerConnectionException`, ...).
 
-// Sender
+```kotlin
+val wormhole = Wormhole(WormholeConfig()) // defaults work with the `wormhole` CLI
+
+// Send text
 wormhole.sendText("hello").collect { event ->
     when (event) {
         is SendEvent.CodeAllocated -> println("Code: ${event.code}")
@@ -25,12 +29,26 @@ wormhole.sendText("hello").collect { event ->
     }
 }
 
-// Receiver
-when (val incoming = wormhole.receive("7-guitarist-revenge")) {
-    is IncomingTransfer.Text -> println(incoming.text)
-    is IncomingTransfer.FileOffer -> incoming.accept(sink) { received, total -> }
+// Send a file (the library closes the source)
+val path = Path("photo.jpg")
+wormhole.sendFile("photo.jpg", SystemFileSystem.metadataOrNull(path)!!.size, SystemFileSystem.source(path))
+    .collect { println(it) }
+
+// Receive
+wormhole.receive("7-guitarist-revenge").collect { event ->
+    when (event) {
+        is ReceiveEvent.TextReceived -> println(event.text)
+        is ReceiveEvent.FileOffered -> event.accept(SystemFileSystem.sink(Path(event.name))) // or event.reject()
+        is ReceiveEvent.Progress -> println("${event.receivedBytes} / ${event.totalBytes}")
+        ReceiveEvent.FileReceived -> println("Done")
+    }
 }
 ```
+
+What is supported: text, single files, receiving directories (as a `.zip`), direct TCP
+connections and the transit relay. Not yet: sending directories, Dilation, Tor.
+On iOS the library does not listen for direct connections yet; it connects out directly or via the
+relay.
 
 ## Installation
 
