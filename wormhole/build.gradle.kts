@@ -6,7 +6,7 @@ plugins {
     alias(libs.plugins.mavenPublish)
 }
 
-// Needed so that composite builds (includeBuild) can substitute uno.lux.wormhole:wormhole.
+// Needed so that composite builds (includeBuild) can substitute io.github.anima-lux-uno:wormhole.
 group = property("GROUP").toString()
 version = property("VERSION_NAME").toString()
 
