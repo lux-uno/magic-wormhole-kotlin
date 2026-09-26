@@ -75,7 +75,7 @@ Using Gradle:
 
 ```kotlin
 dependencies {
-    implementation("io.github.lux-uno:wormhole:<version>")
+    implementation("io.github.lux-uno:magic-wormhole:<version>")
 }
 ```
 

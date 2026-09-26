@@ -6,7 +6,7 @@ plugins {
     alias(libs.plugins.mavenPublish)
 }
 
-// Needed so that composite builds (includeBuild) can substitute io.github.lux-uno:wormhole.
+// Needed so that composite builds (includeBuild) can substitute io.github.lux-uno:magic-wormhole.
 group = property("GROUP").toString()
 version = property("VERSION_NAME").toString()
 
@@ -65,7 +65,7 @@ tasks.withType<Test>().configureEach {
 }
 
 mavenPublishing {
-    // Coordinates come from GROUP and VERSION_NAME in gradle.properties; artifact id = "wormhole".
+    // Coordinates come from GROUP and VERSION_NAME in gradle.properties; artifact id = the module name, "magic-wormhole".
     pom {
         name = "magic-wormhole-kotlin"
         description = "A Kotlin Multiplatform implementation of the Magic Wormhole protocol."
