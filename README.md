@@ -1,15 +1,12 @@
-# wormhole-kotlin
+# magic-wormhole-kotlin
 
 A Kotlin Multiplatform implementation of the [Magic Wormhole](https://magic-wormhole.readthedocs.io/)
 protocol. Send text and files between devices using a short code like `7-guitarist-revenge`.
 
-Compatible with the Python `wormhole` CLI and [wormhole-william](https://github.com/psanford/wormhole-william).
-
-- Pure Kotlin: no native libraries, no Go.
-- Targets: JVM (also Android), iOS (`iosArm64`, `iosSimulatorArm64`).
+- Pure Kotlin: no native libraries.
+- Targets: Windows, macOS, Linux, Android, iOS
 - Coroutines-first API.
-
-> Status: under development. Not yet published.
+- Compatible with the Python `wormhole` CLI.
 
 ## Usage
 
@@ -45,8 +42,7 @@ wormhole.receive("7-guitarist-revenge").collect { event ->
 }
 ```
 
-What is supported: text, single files, directories and several files at once (sent as a zip,
-like `wormhole send <dir>`), direct TCP connections and the transit relay. Not yet: Dilation, Tor.
+What is supported: text, single files, directories and several files at once (sent as a zip), direct TCP connections and the transit relay.
 
 ### Directories and several files
 
@@ -72,12 +68,10 @@ unzip(
 temporary file is needed. `unzip` reads stored and deflated zips (including Zip64 and the
 streamed zips of the `wormhole` CLI), rejects paths that leave the target folder, checks every
 CRC, and stops when the zip holds more than the announced bytes or files.
-On iOS the library does not listen for direct connections yet; it connects out directly or via the
-relay.
 
 ## Installation
 
-After the first release:
+Using Gradle:
 
 ```kotlin
 dependencies {
@@ -89,7 +83,7 @@ For local development, include this repository as a composite build:
 
 ```kotlin
 // settings.gradle.kts of your app
-includeBuild("../wormhole-kotlin")
+includeBuild("../magic-wormhole-kotlin")
 ```
 
 ## Building and testing
