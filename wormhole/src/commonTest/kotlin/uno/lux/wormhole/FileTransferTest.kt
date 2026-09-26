@@ -142,6 +142,22 @@ class FileTransferTest {
             assertEquals(71_000, offer.unpackedSize)
             assertEquals(offer.size, sink.size)
             assertEquals(ReceiveEvent.FileReceived, received.last())
+
+            val unpacked = mutableMapOf<String, Buffer>()
+            val zip = sink.readByteArray()
+            unzip(
+                zip.size.toLong(),
+                { offset -> Buffer().apply { write(zip, offset.toInt(), zip.size) } },
+                object : UnzipTarget {
+                    override fun createDirectory(path: String) = Unit
+
+                    override fun createFile(path: String) = Buffer().also { unpacked[path] = it }
+                },
+                maxBytes = offer.unpackedSize!!,
+                maxFiles = offer.fileCount!!,
+            )
+            assertEquals(files.keys, unpacked.keys)
+            files.forEach { (path, data) -> assertContentEquals(data, unpacked.getValue(path).readByteArray()) }
         }
 
     @Test

@@ -185,6 +185,67 @@ class InteropTest {
             }
         }
 
+    @Test
+    fun cliSendsDirectoryToKotlin() =
+        runBlocking {
+            withTimeout(120_000) {
+                val dir =
+                    kotlin.io.path
+                        .createTempDirectory("wormhole-dir")
+                        .toFile()
+                val files =
+                    mapOf(
+                        "a.txt" to "hello ".repeat(1000).encodeToByteArray(),
+                        "sub/b.bin" to ByteArray(700_000).also { java.util.Random(5).nextBytes(it) },
+                    )
+                files.forEach { (path, data) ->
+                    java.io
+                        .File(dir, path)
+                        .apply { parentFile.mkdirs() }
+                        .writeBytes(data)
+                }
+                val p = withContext(Dispatchers.IO) { cli("send", "--hide-progress", dir.path) }
+                val code =
+                    withContext(Dispatchers.IO) {
+                        val err = p.errorStream.bufferedReader()
+                        generateSequence { err.readLine() }
+                            .first { it.startsWith("Wormhole code is:") }
+                            .substringAfter(":")
+                            .trim()
+                    }
+                val sink = kotlinx.io.Buffer()
+                var offer: ReceiveEvent.FileOffered? = null
+                Wormhole().receive(code).collect { e ->
+                    if (e is ReceiveEvent.FileOffered) {
+                        offer = e
+                        e.accept(sink)
+                    }
+                }
+                val o = offer!!
+                assertEquals(true, o.isDirectory)
+                assertEquals(2, o.fileCount)
+                val unpacked = mutableMapOf<String, kotlinx.io.Buffer>()
+                val zip = sink.readByteArray()
+                unzip(
+                    zip.size.toLong(),
+                    { offset -> kotlinx.io.Buffer().apply { write(zip, offset.toInt(), zip.size) } },
+                    object : UnzipTarget {
+                        override fun createDirectory(path: String) = Unit
+
+                        override fun createFile(path: String) = kotlinx.io.Buffer().also { unpacked[path] = it }
+                    },
+                    maxBytes = o.unpackedSize!!,
+                    maxFiles = o.fileCount!!,
+                )
+                assertEquals(files.keys, unpacked.keys)
+                files.forEach { (path, data) ->
+                    kotlin.test.assertContentEquals(data, unpacked.getValue(path).readByteArray())
+                }
+                withContext(Dispatchers.IO) { p.waitFor(30, TimeUnit.SECONDS) }
+                assertEquals(0, p.exitValue())
+            }
+        }
+
     /** A real TCP network that neither listens nor connects directly, so only the relay works. */
     private fun relayOnlyNetwork(): uno.lux.wormhole.transit.TransitNetwork {
         val tcp =

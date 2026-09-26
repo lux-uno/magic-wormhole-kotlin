@@ -45,8 +45,33 @@ wormhole.receive("7-guitarist-revenge").collect { event ->
 }
 ```
 
-What is supported: text, single files, receiving directories (as a `.zip`), direct TCP
-connections and the transit relay. Not yet: sending directories, Dilation, Tor.
+What is supported: text, single files, directories and several files at once (sent as a zip,
+like `wormhole send <dir>`), direct TCP connections and the transit relay. Not yet: Dilation, Tor.
+
+### Directories and several files
+
+```kotlin
+// Send: entries are relative paths; `open` is called twice (checksum pass, then send).
+wormhole.sendDirectory(
+    "holiday",
+    listOf(DirectoryEntry("beach.jpg", size) { SystemFileSystem.source(Path("beach.jpg")) }),
+).collect { println(it) }
+
+// Receive: a directory arrives as `<name>.zip` with isDirectory = true.
+// Save it (for example to a temporary file), then unpack it safely:
+unzip(
+    size = zipSize,
+    open = { offset -> SystemFileSystem.source(zipPath).buffered().apply { skip(offset) } },
+    target = myTarget, // an UnzipTarget that creates folders and files
+    maxBytes = offer.unpackedSize ?: Long.MAX_VALUE,
+    maxFiles = offer.fileCount ?: Int.MAX_VALUE,
+)
+```
+
+`sendDirectory` writes an uncompressed (stored) zip whose size is known before sending, so no
+temporary file is needed. `unzip` reads stored and deflated zips (including Zip64 and the
+streamed zips of the `wormhole` CLI), rejects paths that leave the target folder, checks every
+CRC, and stops when the zip holds more than the announced bytes or files.
 On iOS the library does not listen for direct connections yet; it connects out directly or via the
 relay.
 
