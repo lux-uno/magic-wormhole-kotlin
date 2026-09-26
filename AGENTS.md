@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for AI agents and humans working on wormhole-kotlin.
+Guidance for AI agents and humans working on magic-wormhole-kotlin.
 
 ## Project
 

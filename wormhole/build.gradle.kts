@@ -67,7 +67,7 @@ tasks.withType<Test>().configureEach {
 mavenPublishing {
     // Coordinates come from GROUP and VERSION_NAME in gradle.properties; artifact id = "wormhole".
     pom {
-        name = "wormhole-kotlin"
+        name = "magic-wormhole-kotlin"
         description = "A Kotlin Multiplatform implementation of the Magic Wormhole protocol."
         inceptionYear = "2026"
         url = "https://github.com/lux-uno/magic-wormhole-kotlin"

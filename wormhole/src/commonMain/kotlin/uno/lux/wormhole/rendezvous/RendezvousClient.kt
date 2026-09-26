@@ -173,7 +173,7 @@ internal class RendezvousClient private constructor(
     }
 
     companion object {
-        val CLIENT_VERSION = listOf("kotlin", "wormhole-kotlin 0.1.0")
+        val CLIENT_VERSION = listOf("kotlin", "magic-wormhole-kotlin 0.1.0")
         private const val REPLY_TIMEOUT_MS = 5_000L
 
         suspend fun connect(

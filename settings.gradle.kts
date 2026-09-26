@@ -1,4 +1,4 @@
-rootProject.name = "wormhole-kotlin"
+rootProject.name = "magic-wormhole-kotlin"
 
 pluginManagement {
     repositories {
