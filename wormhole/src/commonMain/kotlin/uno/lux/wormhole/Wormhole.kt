@@ -2,12 +2,15 @@ package uno.lux.wormhole
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
+import kotlinx.io.Buffer
 import kotlinx.io.RawSink
 import kotlinx.io.RawSource
+import kotlinx.io.readByteArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -22,6 +25,9 @@ import uno.lux.wormhole.transit.DirectHint
 import uno.lux.wormhole.transit.TcpTransitNetwork
 import uno.lux.wormhole.transit.TransitHints
 import uno.lux.wormhole.transit.TransitNetwork
+import uno.lux.wormhole.zip.Crc32
+import uno.lux.wormhole.zip.ZipFileEntry
+import uno.lux.wormhole.zip.ZipWriter
 
 /** Default Magic Wormhole rendezvous (mailbox) server, as used by the current `wormhole` CLI. */
 public const val DEFAULT_RENDEZVOUS_URL: String = "wss://relay.magic-wormhole.io/v1"
@@ -72,13 +78,20 @@ public sealed interface ReceiveEvent {
 
     /**
      * The sender offers a file. Call [accept] or [reject]; the flow waits until you do.
-     * A directory arrives as a zip file named `<dirname>.zip` ([isDirectory] is true).
+     *
+     * A directory (or several files) arrives as a zip file named `<dirname>.zip`: [isDirectory]
+     * is true, and [fileCount] and [unpackedSize] tell what is inside. Unpack it with [unzip],
+     * using [unpackedSize] and [fileCount] as limits.
      */
     public class FileOffered internal constructor(
         public val name: String,
         public val size: Long,
         public val isDirectory: Boolean,
         private val decision: CompletableDeferred<RawSink?>,
+        /** Number of files in the directory, if the sender said. Null for a single file. */
+        public val fileCount: Int? = null,
+        /** Total size of the files in the directory, if the sender said. Null for a single file. */
+        public val unpackedSize: Long? = null,
     ) : ReceiveEvent {
         /** Receives the file into [sink]. The library closes [sink] when the transfer ends. */
         public fun accept(sink: RawSink) {
@@ -90,7 +103,8 @@ public sealed interface ReceiveEvent {
             decision.complete(null)
         }
 
-        override fun toString(): String = "FileOffered(name=$name, size=$size, isDirectory=$isDirectory)"
+        override fun toString(): String =
+            "FileOffered(name=$name, size=$size, isDirectory=$isDirectory, fileCount=$fileCount, unpackedSize=$unpackedSize)"
     }
 
     public data class Progress(
@@ -100,6 +114,41 @@ public sealed interface ReceiveEvent {
 
     /** The whole file was received and verified. This is the last event. */
     public data object FileReceived : ReceiveEvent
+}
+
+/**
+ * One file of a directory sent with [Wormhole.sendDirectory]. [path] is relative to the
+ * directory and uses `/` between folders, for example `photos/2024/beach.jpg`. [open] returns
+ * a new source with the [size] bytes of the file each time it is called; the library closes it.
+ */
+public class DirectoryEntry(
+    public val path: String,
+    public val size: Long,
+    public val open: () -> RawSource,
+) {
+    init {
+        require(size >= 0) { "Negative size for $path" }
+    }
+
+    internal fun checksummed(): ZipFileEntry {
+        val crc = Crc32()
+        val buffer = Buffer()
+        open().use { source ->
+            while (source.readAtMostTo(buffer, CHUNK) != -1L) crc.update(buffer.readByteArray())
+        }
+        return ZipFileEntry(path, size, crc.value, open)
+    }
+
+    internal companion object {
+        private const val CHUNK = 64 * 1024L
+
+        fun checkPath(path: String) {
+            val parts = path.split('/')
+            require(path.isNotEmpty() && '\\' !in path && parts.none { it.isEmpty() || it == "." || it == ".." }) {
+                "Invalid path in directory: \"$path\""
+            }
+        }
+    }
 }
 
 /**
@@ -148,7 +197,14 @@ public class Wormhole internal constructor(
                     withSenderMailbox(this) { handle, session ->
                         val network = transitNetwork()
                         try {
-                            FileTransfer.send(session, network, relay, name, size, source) { sent ->
+                            FileTransfer.send(
+                                session,
+                                network,
+                                relay,
+                                FileTransfer.fileOffer(name, size),
+                                size,
+                                source,
+                            ) { sent ->
                                 emit(SendEvent.Progress(sent, size))
                             }
                             handle.markHappy()
@@ -162,6 +218,48 @@ public class Wormhole internal constructor(
                 source.close()
             }
         }
+
+    /**
+     * Sends [entries] as a directory called [name], the way `wormhole send <dir>` does: as a zip
+     * that the receiver unpacks into a folder called [name]. Use this to send several files at
+     * once. Each entry's source is read twice (once for its checksum, once to send it), so
+     * [DirectoryEntry.open] must return the same bytes each time. Emits the same events as
+     * [sendFile]; progress counts bytes of the zip.
+     */
+    public fun sendDirectory(
+        name: String,
+        entries: List<DirectoryEntry>,
+    ): Flow<SendEvent> {
+        require(name.isNotEmpty() && '/' !in name && '\\' !in name && name != "." && name != "..") {
+            "Invalid directory name: \"$name\""
+        }
+        entries.forEach { DirectoryEntry.checkPath(it.path) }
+        val duplicate = entries.groupBy { it.path }.values.firstOrNull { it.size > 1 }
+        require(duplicate == null) { "Duplicate path: ${duplicate?.first()?.path}" }
+        return flow {
+            coroutineScope {
+                // Checksum the files while the receiver types the code.
+                val zip = async { ZipWriter(entries.map { it.checksummed() }) }
+                withSenderMailbox(this) { handle, session ->
+                    val writer = zip.await()
+                    val offer =
+                        FileTransfer.directoryOffer(name, writer.size, entries.sumOf { it.size }, entries.size)
+                    val source = writer.source()
+                    val network = transitNetwork()
+                    try {
+                        FileTransfer.send(session, network, relay, offer, writer.size, source) { sent ->
+                            emit(SendEvent.Progress(sent, writer.size))
+                        }
+                        handle.markHappy()
+                    } finally {
+                        network.close()
+                        source.close()
+                    }
+                }
+                emit(SendEvent.Completed)
+            }
+        }
+    }
 
     /** Receives whatever the sender offers with [code]. */
     public fun receive(code: String): Flow<ReceiveEvent> =
@@ -199,7 +297,16 @@ public class Wormhole internal constructor(
                     }
 
                     val decision = CompletableDeferred<RawSink?>()
-                    emit(ReceiveEvent.FileOffered(name, size, isDirectory = directory != null, decision))
+                    emit(
+                        ReceiveEvent.FileOffered(
+                            name,
+                            size,
+                            isDirectory = directory != null,
+                            decision,
+                            fileCount = directory?.longValue("numfiles")?.toInt(),
+                            unpackedSize = directory?.longValue("numbytes"),
+                        ),
+                    )
                     val sink = decision.await()
                     if (sink == null) {
                         session.send(buildJsonObject { put("error", "transfer rejected") })

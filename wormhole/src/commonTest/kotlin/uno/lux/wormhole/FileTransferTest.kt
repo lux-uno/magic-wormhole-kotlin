@@ -13,6 +13,7 @@ import uno.lux.wormhole.transit.FakeInternet
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -70,6 +71,7 @@ class FileTransferTest {
             assertEquals("photo.jpg", offer.name)
             assertEquals(200_000, offer.size)
             assertEquals(false, offer.isDirectory)
+            assertEquals(null, offer.fileCount)
             assertEquals(ReceiveEvent.Progress(200_000, 200_000), received[received.size - 2])
             assertEquals(ReceiveEvent.FileReceived, received.last())
         }
@@ -104,6 +106,55 @@ class FileTransferTest {
             assertEquals(1, received.size)
             assertIs<TransferRejectedException>(sender.await().exceptionOrNull())
         }
+
+    private fun entry(
+        path: String,
+        data: ByteArray,
+    ) = DirectoryEntry(path, data.size.toLong()) { Buffer().apply { write(data) } }
+
+    @Test
+    fun directoryGoesFromSenderToReceiverAsAZip() =
+        runTest {
+            val files = mapOf("a.txt" to content(1000), "sub/b.bin" to content(70_000))
+            val code = CompletableDeferred<String>()
+            val sender =
+                async {
+                    val events = mutableListOf<SendEvent>()
+                    wormhole("10.0.0.1").sendDirectory("holiday", files.map { (p, d) -> entry(p, d) }).collect {
+                        events += it
+                        if (it is SendEvent.CodeAllocated) code.complete(it.code)
+                    }
+                    events
+                }
+            val sink = Buffer()
+            val received = mutableListOf<ReceiveEvent>()
+            wormhole("10.0.0.2").receive(code.await()).collect { event ->
+                received += event
+                if (event is ReceiveEvent.FileOffered) event.accept(sink)
+            }
+            assertEquals(SendEvent.Completed, sender.await().last())
+
+            val offer = received.first()
+            assertIs<ReceiveEvent.FileOffered>(offer)
+            assertEquals("holiday.zip", offer.name)
+            assertEquals(true, offer.isDirectory)
+            assertEquals(2, offer.fileCount)
+            assertEquals(71_000, offer.unpackedSize)
+            assertEquals(offer.size, sink.size)
+            assertEquals(ReceiveEvent.FileReceived, received.last())
+        }
+
+    @Test
+    fun directoryEntriesMustBeSafeRelativePaths() {
+        val w = Wormhole()
+        for (bad in listOf("", "/abs", "../up", "a/../b", "a//b", "dir/", "back\\slash", "./a")) {
+            assertFailsWith<IllegalArgumentException>(bad) { w.sendDirectory("d", listOf(entry(bad, ByteArray(1)))) }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            w.sendDirectory("d", listOf(entry("same", ByteArray(1)), entry("same", ByteArray(1))))
+        }
+        assertFailsWith<IllegalArgumentException> { w.sendDirectory("a/b", listOf(entry("x", ByteArray(1)))) }
+    }
 
     @Test
     fun directoryOffersArriveAsZipFiles() =
@@ -148,6 +199,8 @@ class FileTransferTest {
             assertEquals("holiday.zip", offer.name)
             assertEquals(1234, offer.size)
             assertEquals(true, offer.isDirectory)
+            assertEquals(3, offer.fileCount)
+            assertEquals(5000, offer.unpackedSize)
             client.shutdown()
         }
 }

@@ -29,7 +29,7 @@ internal object FileTransfer {
         session: WormholeSession,
         network: TransitNetwork,
         relay: DirectHint?,
-        name: String,
+        offer: JsonObject,
         size: Long,
         source: RawSource,
         onProgress: suspend (Long) -> Unit,
@@ -37,22 +37,7 @@ internal object FileTransfer {
         val transit = Transit(Transit.Role.SENDER, session.deriveKey(TRANSIT_KEY_PURPOSE), network, relay)
         try {
             session.send(buildJsonObject { put("transit", transit.start()) })
-            session.send(
-                buildJsonObject {
-                    put(
-                        "offer",
-                        buildJsonObject {
-                            put(
-                                "file",
-                                buildJsonObject {
-                                    put("filename", name)
-                                    put("filesize", size)
-                                },
-                            )
-                        },
-                    )
-                },
-            )
+            session.send(buildJsonObject { put("offer", offer) })
 
             var peerHints = TransitHints(emptyList(), emptyList())
             while (true) {
@@ -152,6 +137,41 @@ internal object FileTransfer {
             transit.close()
         }
     }
+
+    /** The offer for a single file. */
+    fun fileOffer(
+        name: String,
+        size: Long,
+    ): JsonObject =
+        buildJsonObject {
+            put(
+                "file",
+                buildJsonObject {
+                    put("filename", name)
+                    put("filesize", size)
+                },
+            )
+        }
+
+    /** The offer for a directory sent as a zip, in the format of magic-wormhole's cmd_send.py. */
+    fun directoryOffer(
+        name: String,
+        zipSize: Long,
+        numBytes: Long,
+        numFiles: Int,
+    ): JsonObject =
+        buildJsonObject {
+            put(
+                "directory",
+                buildJsonObject {
+                    put("mode", "zipfile/deflated")
+                    put("dirname", name)
+                    put("zipsize", zipSize)
+                    put("numbytes", numBytes)
+                    put("numfiles", numFiles)
+                },
+            )
+        }
 
     private fun parse(bytes: ByteArray): JsonObject =
         try {

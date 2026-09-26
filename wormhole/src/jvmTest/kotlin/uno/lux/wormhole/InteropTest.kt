@@ -143,6 +143,48 @@ class InteropTest {
             }
         }
 
+    @Test
+    fun kotlinSendsDirectoryToTheCli() =
+        runBlocking {
+            withTimeout(120_000) {
+                val files =
+                    mapOf(
+                        "a.txt" to "hello".encodeToByteArray(),
+                        "sub/b.bin" to ByteArray(500_000).also { java.util.Random(3).nextBytes(it) },
+                        "sub/deeper/empty" to ByteArray(0),
+                    )
+                val target =
+                    kotlin.io.path
+                        .createTempDirectory("wormhole-out")
+                        .toFile()
+                val out = java.io.File(target, "received")
+                val code = CompletableDeferred<String>()
+                val sender =
+                    async {
+                        Wormhole()
+                            .sendDirectory(
+                                "holiday",
+                                files.map { (path, data) ->
+                                    DirectoryEntry(
+                                        path,
+                                        data.size.toLong(),
+                                    ) { kotlinx.io.Buffer().apply { write(data) } }
+                                },
+                            ).collect { if (it is SendEvent.CodeAllocated) code.complete(it.code) }
+                    }
+                withContext(Dispatchers.IO) {
+                    val p = cli("receive", "--hide-progress", "--accept-file", "--output-file", out.path, code.await())
+                    val err = p.errorStream.bufferedReader().readText()
+                    p.waitFor(90, TimeUnit.SECONDS)
+                    assertEquals(0, p.exitValue(), err)
+                }
+                sender.await()
+                files.forEach { (path, data) ->
+                    kotlin.test.assertContentEquals(data, java.io.File(out, path).readBytes(), path)
+                }
+            }
+        }
+
     /** A real TCP network that neither listens nor connects directly, so only the relay works. */
     private fun relayOnlyNetwork(): uno.lux.wormhole.transit.TransitNetwork {
         val tcp =
