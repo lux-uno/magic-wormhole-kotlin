@@ -124,6 +124,11 @@ mavenPublishing {
     signAllPublications()
 }
 
-extensions.configure<SigningExtension> {
-    useGpgCmd()
+// Locally, sign with the gpg command and its agent, so the key and passphrase are never on disk.
+// In CI, sign with an in-memory key from ORG_GRADLE_PROJECT_signingInMemoryKey* secrets instead,
+// since there is no gpg agent to prompt there.
+if (!providers.environmentVariable("CI").isPresent) {
+    extensions.configure<SigningExtension> {
+        useGpgCmd()
+    }
 }

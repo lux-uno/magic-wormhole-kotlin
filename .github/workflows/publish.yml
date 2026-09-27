@@ -1,0 +1,38 @@
+# Publishes to Maven Central for each release tag. Runs on macOS so the iOS klibs (iosArm64,
+# iosSimulatorArm64) can be built alongside the JVM and root KMP metadata publications.
+name: Publish
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check that the tag matches the version
+        run: |
+          version=$(grep '^VERSION_NAME=' gradle.properties | cut -d= -f2)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::$GITHUB_REF_NAME does not match VERSION_NAME=$version in gradle.properties"
+            exit 1
+          fi
+      - uses: actions/setup-java@v5
+        with:
+          distribution: zulu
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Publish and release to Maven Central
+        run: ./gradlew :magic-wormhole:publishAndReleaseToMavenCentral --no-configuration-cache
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_SIGNING_PASSWORD }}
