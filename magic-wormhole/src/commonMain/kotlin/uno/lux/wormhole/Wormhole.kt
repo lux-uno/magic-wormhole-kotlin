@@ -67,16 +67,23 @@ public sealed interface SendEvent {
     /** Give this code to the receiver. */
     public data class CodeAllocated(
         val code: String,
-    ) : SendEvent
+    ) : SendTextEvent,
+        SendFileEvent
 
     public data class Progress(
         val sentBytes: Long,
         val totalBytes: Long,
-    ) : SendEvent
+    ) : SendFileEvent
 
     /** The receiver got everything. This is the last event. */
-    public data object Completed : SendEvent
+    public data object Completed : SendTextEvent, SendFileEvent
 }
+
+/** Events emitted by [Wormhole.sendText]. */
+public sealed interface SendTextEvent : SendEvent
+
+/** Events emitted by [Wormhole.sendFile] and [Wormhole.sendDirectory]. */
+public sealed interface SendFileEvent : SendEvent
 
 /** Progress of a receive. */
 public sealed interface ReceiveEvent {
@@ -206,10 +213,10 @@ public class Wormhole internal constructor(
     private val relay: DirectHint? = config.transitRelay?.let(DirectHint::parseRelayUrl)
 
     /** Sends [text]. Emits [SendEvent.CodeAllocated], then [SendEvent.Completed]. */
-    public fun sendText(text: String): Flow<SendEvent> =
+    public fun sendText(text: String): Flow<SendTextEvent> =
         flow {
             coroutineScope {
-                withSenderMailbox(this) { handle, session ->
+                withSenderMailbox(this, this@flow::emit) { handle, session ->
                     session.send(buildJsonObject { put("offer", buildJsonObject { put("message", text) }) })
                     val answer = session.receive()
                     answer.throwIfPeerError()
@@ -229,7 +236,7 @@ public class Wormhole internal constructor(
     public fun sendFile(
         path: Path,
         name: String = path.name,
-    ): Flow<SendEvent> =
+    ): Flow<SendFileEvent> =
         flow {
             val metadata = SystemFileSystem.metadataOrNull(path)
             if (metadata == null || !metadata.isRegularFile) throw FileNotFoundException("No file at $path")
@@ -241,11 +248,11 @@ public class Wormhole internal constructor(
      * Android `content://` URI. Emits
      * [SendEvent.CodeAllocated], [SendEvent.Progress] updates, then [SendEvent.Completed].
      */
-    public fun sendFile(file: OutgoingFile): Flow<SendEvent> =
+    public fun sendFile(file: OutgoingFile): Flow<SendFileEvent> =
         flow {
             file.open().use { source ->
                 coroutineScope {
-                    withSenderMailbox(this) { handle, session ->
+                    withSenderMailbox(this, this@flow::emit) { handle, session ->
                         val offer = FileTransfer.fileOffer(file.name, file.size)
                         sendOverTransit(session, handle, offer, file.size, source)
                     }
@@ -261,7 +268,7 @@ public class Wormhole internal constructor(
     public fun sendDirectory(
         path: Path,
         name: String = path.name,
-    ): Flow<SendEvent> = flow { emitAll(sendDirectory(name, filesIn(path))) }
+    ): Flow<SendFileEvent> = flow { emitAll(sendDirectory(name, filesIn(path))) }
 
     /**
      * Sends [files] as a directory called [name], the way `wormhole send <dir>` does: as a zip
@@ -273,13 +280,13 @@ public class Wormhole internal constructor(
     public fun sendDirectory(
         name: String,
         files: List<OutgoingFile>,
-    ): Flow<SendEvent> {
+    ): Flow<SendFileEvent> {
         checkDirectory(name, files)
         return flow {
             coroutineScope {
                 // Checksum the files while the receiver types the code.
                 val zip = async { ZipWriter(files.map { it.checksummed() }) }
-                withSenderMailbox(this) { handle, session ->
+                withSenderMailbox(this, this@flow::emit) { handle, session ->
                     val writer = zip.await()
                     val offer =
                         FileTransfer.directoryOffer(name, writer.size, files.sumOf { it.size }, files.size)
@@ -303,7 +310,7 @@ public class Wormhole internal constructor(
     }
 
     /** Offers [offer], then sends the [size] bytes of [source] over a transit connection. */
-    private suspend fun FlowCollector<SendEvent>.sendOverTransit(
+    private suspend fun FlowCollector<SendFileEvent>.sendOverTransit(
         session: WormholeSession,
         handle: Handle,
         offer: JsonObject,
@@ -482,8 +489,9 @@ public class Wormhole internal constructor(
         }
     }
 
-    private suspend fun FlowCollector<SendEvent>.withSenderMailbox(
+    private suspend fun withSenderMailbox(
         scope: CoroutineScope,
+        onCodeAllocated: suspend (SendEvent.CodeAllocated) -> Unit,
         block: suspend (Handle, WormholeSession) -> Unit,
     ) {
         val client = RendezvousClient.connect(rendezvousTransport, config.rendezvousUrl, config.appId, scope)
@@ -495,7 +503,7 @@ public class Wormhole internal constructor(
             mailbox = client.claim(nameplate)
             client.open(mailbox)
             val code = Codes.build(nameplate, config.codeLength)
-            emit(SendEvent.CodeAllocated(code))
+            onCodeAllocated(SendEvent.CodeAllocated(code))
             val session = WormholeSession(client, config.appId)
             exchangeKeys(session, code, handle)
             client.release(nameplate)

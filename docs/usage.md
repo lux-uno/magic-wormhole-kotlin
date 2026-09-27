@@ -38,7 +38,6 @@ Paths are [`kotlinx.io.files.Path`](https://kotlinlang.org/api/kotlinx-io/kotlin
 wormhole.sendText("hello").collect { event ->
     when (event) {
         is SendEvent.CodeAllocated -> println("Give the receiver this code: ${event.code}")
-        is SendEvent.Progress -> Unit // not used for text
         SendEvent.Completed -> println("Delivered")
     }
 }

@@ -25,7 +25,6 @@ val wormhole = Wormhole() // the defaults work with the `wormhole` CLI
 wormhole.sendText("hello").collect { event ->
     when (event) {
         is SendEvent.CodeAllocated -> println("Code: ${event.code}")
-        is SendEvent.Progress -> Unit
         SendEvent.Completed -> println("Sent")
     }
 }
