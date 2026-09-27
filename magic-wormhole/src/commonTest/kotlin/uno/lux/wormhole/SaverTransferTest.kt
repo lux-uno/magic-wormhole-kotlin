@@ -64,11 +64,15 @@ class SaverTransferTest {
     private val server = FakeMailboxServer()
     private var internet: FakeInternet? = null
     private val saver = MemorySaver()
+    private var folderUnpacker = FolderUnpacker.streaming()
 
     private fun TestScope.wormhole(address: String): Wormhole {
         val internet = internet ?: FakeInternet(backgroundScope).also { internet = it }
         return Wormhole(
-            WormholeConfig(transitRelay = "tcp:${FakeInternet.RELAY_HOST}:${FakeInternet.RELAY_PORT}"),
+            WormholeConfig(
+                transitRelay = "tcp:${FakeInternet.RELAY_HOST}:${FakeInternet.RELAY_PORT}",
+                folderUnpacker = folderUnpacker,
+            ),
             rendezvousTransport = server.transport,
             transitNetwork = { internet.network(listOf(address)) },
         )
@@ -127,8 +131,23 @@ class SaverTransferTest {
             files.forEach { (path, data) ->
                 assertContentEquals(data, saver.files.getValue("holiday/$path").readByteArray())
             }
-            assertEquals(ReceiveEvent.Unpacking, events[events.size - 2])
+            assertTrue(events.none { it == ReceiveEvent.Unpacking }, "Streaming needs no unpacking step")
             assertEquals(ReceiveEvent.FileReceived(SavedFile("holiday", "memory:holiday")), events.last())
+        }
+
+    @Test
+    fun directoryCanBeUnpackedFromATemporaryFile() =
+        runTest {
+            folderUnpacker = FolderUnpacker.temporaryFile()
+            val files = mapOf("a.txt" to content(1000), "sub/b.bin" to content(70_000))
+            val (events, error) = transfer({ sendDirectory("holiday", files.map { (p, d) -> entry(p, d) }) })
+
+            assertEquals(null, error)
+            assertEquals(listOf("createFolder holiday", "commit holiday"), saver.log)
+            files.forEach { (path, data) ->
+                assertContentEquals(data, saver.files.getValue("holiday/$path").readByteArray())
+            }
+            assertEquals(ReceiveEvent.Unpacking, events[events.size - 2])
         }
 
     @Test

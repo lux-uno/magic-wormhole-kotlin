@@ -3,6 +3,7 @@ package uno.lux.wormhole
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import kotlinx.io.Buffer
 import kotlinx.io.RawSink
 import kotlinx.io.RawSource
 import kotlinx.io.buffered
@@ -26,7 +27,7 @@ public suspend fun unzip(
     unzipFile(zip, FolderUnzipTarget(folder), maxBytes, maxFiles)
 }
 
-private suspend fun unzipFile(
+internal suspend fun unzipFile(
     zip: Path,
     target: UnzipTarget,
     maxBytes: Long,
@@ -89,73 +90,109 @@ internal fun filesIn(folder: Path): List<OutgoingFile> {
 
 /** Where a received file goes. */
 internal interface Destination {
-    /** Opens the sink for the received bytes. Storage errors are thrown as [SaveFailedException]. */
-    suspend fun open(): RawSink
+    /** Prepares the storage. Storage errors are thrown as [SaveFailedException]. */
+    suspend fun open()
+
+    /** The next received bytes. */
+    suspend fun write(bytes: ByteArray)
 
     /**
-     * Called after all bytes arrived and the sink was closed. Calls [onUnpacking] before it
-     * unpacks a directory. Returns where the file was saved, if known.
+     * Called after all bytes arrived. Calls [onUnpacking] before a slow unpack. Returns where the
+     * file was saved, if known.
      */
-    suspend fun finish(onUnpacking: suspend () -> Unit): SavedFile? = null
+    suspend fun finish(onUnpacking: suspend () -> Unit): SavedFile?
 
     /** Called when the transfer failed after [open]. */
-    suspend fun discard() = Unit
+    suspend fun discard()
 }
 
 internal class SinkDestination(
     private val sink: RawSink,
 ) : Destination {
-    override suspend fun open() = sink
+    private val buffer = Buffer()
+
+    override suspend fun open() = Unit
+
+    override suspend fun write(bytes: ByteArray) {
+        buffer.write(bytes)
+        sink.write(buffer, buffer.size)
+    }
+
+    override suspend fun finish(onUnpacking: suspend () -> Unit): SavedFile? {
+        sink.flush()
+        sink.close()
+        return null
+    }
+
+    override suspend fun discard() {
+        runCatching { sink.close() }
+    }
 }
 
 /**
- * Saves through [saver]. When [unpack] is true, a directory goes to a temporary zip first and
- * [finish] unpacks it into a folder of the saver.
+ * Saves through [saver]. When [unpack] is true, a directory is unpacked by [unpacker] into a
+ * folder of the saver.
  */
 internal class SaverDestination(
     private val saver: FileSaver,
     private val offer: ReceiveEvent.FileOffered,
     unpack: Boolean,
+    private val unpacker: FolderUnpacker,
 ) : Destination {
     private val unpacks = unpack && offer.isDirectory
     private var file: IncomingFile? = null
-    private var zip: Path? = null
+    private var folder: IncomingFolder? = null
+    private var zip: ZipReceiver? = null
+    private val buffer = Buffer()
 
-    override suspend fun open(): RawSink =
-        saving("Could not create the file") {
-            if (unpacks) {
-                val path = Path(SystemTemporaryDirectory, "wormhole-${Random.nextLong().toULong().toString(16)}.zip")
-                zip = path
-                SystemFileSystem.sink(path)
-            } else {
-                saver.createFile(safeFileName(offer.name), offer.size).also { file = it }.sink
-            }
-        }
-
-    override suspend fun finish(onUnpacking: suspend () -> Unit): SavedFile {
-        file?.let { return saving("Could not save the file") { it.commit() } }
-        val zip = zip!!
+    override suspend fun open() {
         try {
-            onUnpacking()
-            val name = safeFileName(offer.name.removeSuffix(".zip"))
-            val folder = saving("Could not create the folder") { saver.createFolder(name) }
-            try {
-                saving("Could not save the folder") {
-                    unzipFile(zip, folder, offer.unpackedSize ?: Long.MAX_VALUE, offer.fileCount ?: Int.MAX_VALUE)
+            saving("Could not create the file") {
+                if (unpacks) {
+                    val folder = saver.createFolder(safeFileName(offer.name.removeSuffix(".zip"))).also { folder = it }
+                    val maxBytes = offer.unpackedSize ?: Long.MAX_VALUE
+                    zip = unpacker.start(folder, offer.size, maxBytes, offer.fileCount ?: Int.MAX_VALUE)
+                } else {
+                    file = saver.createFile(safeFileName(offer.name), offer.size)
                 }
-                return saving("Could not save the folder") { folder.commit() }
-            } catch (e: Throwable) {
-                withContext(NonCancellable) { runCatching { folder.discard() } }
-                throw e
             }
-        } finally {
-            SystemFileSystem.delete(zip, mustExist = false)
+        } catch (e: Throwable) {
+            withContext(NonCancellable) { discard() }
+            throw e
         }
     }
 
+    override suspend fun write(bytes: ByteArray) =
+        saving("Could not save the file") {
+            val zip = zip
+            if (zip != null) {
+                zip.write(bytes)
+            } else {
+                buffer.write(bytes)
+                file!!.sink.write(buffer, buffer.size)
+            }
+        }
+
+    override suspend fun finish(onUnpacking: suspend () -> Unit): SavedFile =
+        saving("Could not save the file") {
+            val file = file
+            if (file != null) {
+                file.sink.flush()
+                file.sink.close()
+                file.commit()
+            } else {
+                zip!!.finish(onUnpacking)
+                folder!!.commit()
+            }
+        }
+
     override suspend fun discard() {
-        runCatching { file?.discard() }
-        zip?.let { runCatching { SystemFileSystem.delete(it, mustExist = false) } }
+        runCatching { zip?.discard() }
+        runCatching { folder?.discard() }
+        file?.let {
+            runCatching { it.sink.close() }
+            runCatching { it.discard() }
+        }
     }
 }
 

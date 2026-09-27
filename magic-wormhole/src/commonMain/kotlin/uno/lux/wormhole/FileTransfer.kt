@@ -2,7 +2,6 @@
 package uno.lux.wormhole
 
 import kotlinx.io.Buffer
-import kotlinx.io.RawSink
 import kotlinx.io.RawSource
 import kotlinx.io.readByteArray
 import kotlinx.serialization.SerializationException
@@ -95,7 +94,7 @@ internal object FileTransfer {
         relay: DirectHint?,
         senderHints: TransitHints?,
         size: Long,
-        sink: RawSink,
+        write: suspend (ByteArray) -> Unit,
         onProgress: suspend (Long) -> Unit,
     ) {
         val transit = Transit(Transit.Role.RECEIVER, session.deriveKey(TRANSIT_KEY_PURPOSE), network, relay)
@@ -106,7 +105,6 @@ internal object FileTransfer {
             val pipe = transit.connect(senderHints ?: TransitHints(emptyList(), emptyList()))
             try {
                 val hasher = SHA256()
-                val buffer = Buffer()
                 val throttle = ProgressThrottle(onProgress)
                 var received = 0L
                 while (received < size) {
@@ -117,12 +115,10 @@ internal object FileTransfer {
                         throw TransitException("The sender sent more data than announced")
                     }
                     hasher.update(record)
-                    buffer.write(record)
-                    sink.write(buffer, buffer.size)
+                    write(record)
                     received += record.size
                     throttle.report(received)
                 }
-                sink.flush()
                 throttle.finish(received)
                 val ack =
                     buildJsonObject {

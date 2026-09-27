@@ -18,6 +18,10 @@ internal class Inflater(
     private var flushedUpTo = 0
     private var total = 0L
 
+    /** Number of compressed bytes read so far. */
+    var consumed = 0L
+        private set
+
     /** Inflates the whole stream. [output] gets the bytes `bytes[start until end]`. */
     fun inflate(output: (bytes: ByteArray, start: Int, end: Int) -> Unit) {
         try {
@@ -36,7 +40,11 @@ internal class Inflater(
         }
     }
 
-    private fun readByte(): Int = source.readByte().toInt() and 0xFF
+    private fun readByte(): Int {
+        val byte = source.readByte().toInt() and 0xFF
+        consumed++
+        return byte
+    }
 
     private fun bits(n: Int): Int {
         while (bitCount < n) {
@@ -74,7 +82,7 @@ internal class Inflater(
         val length = readByte() or (readByte() shl 8)
         val inverse = readByte() or (readByte() shl 8)
         if (length != inverse.inv() and 0xFFFF) throw InvalidZipException("Invalid stored block length")
-        repeat(length) { put(source.readByte(), output) }
+        repeat(length) { put(readByte().toByte(), output) }
     }
 
     private fun decode(code: Huffman): Int {

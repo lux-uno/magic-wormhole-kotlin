@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
@@ -241,6 +242,60 @@ class InteropTest {
                 }
                 withContext(Dispatchers.IO) { p.waitFor(30, TimeUnit.SECONDS) }
                 assertEquals(0, p.exitValue())
+            }
+        }
+
+    @Test
+    fun cliSendsDirectoryToKotlinWhichUnpacksIt() =
+        runBlocking {
+            for (unpacker in listOf(FolderUnpacker.streaming(), FolderUnpacker.temporaryFile())) {
+                withTimeout(2.minutes) {
+                    val dir =
+                        kotlin.io.path
+                            .createTempDirectory("wormhole-dir")
+                            .toFile()
+                    val files =
+                        mapOf(
+                            "a.txt" to "hello ".repeat(1000).encodeToByteArray(),
+                            "sub/b.bin" to ByteArray(700_000).also { java.util.Random(5).nextBytes(it) },
+                        )
+                    files.forEach { (path, data) ->
+                        java.io
+                            .File(dir, path)
+                            .apply { parentFile.mkdirs() }
+                            .writeBytes(data)
+                    }
+                    val p = withContext(Dispatchers.IO) { cli("send", "--hide-progress", dir.path) }
+                    val code =
+                        withContext(Dispatchers.IO) {
+                            val err = p.errorStream.bufferedReader()
+                            generateSequence { err.readLine() }
+                                .first { it.startsWith("Wormhole code is:") }
+                                .substringAfter(":")
+                                .trim()
+                        }
+                    val downloads =
+                        kotlin.io.path
+                            .createTempDirectory("wormhole-downloads")
+                            .toFile()
+                    val events = mutableListOf<ReceiveEvent>()
+                    Wormhole(WormholeConfig(folderUnpacker = unpacker)).receive(code).collect { e ->
+                        events += e
+                        if (e is ReceiveEvent.FileOffered) e.acceptInto(kotlinx.io.files.Path(downloads.path))
+                    }
+                    val saved = assertIs<ReceiveEvent.FileReceived>(events.last()).saved!!
+                    assertEquals(dir.name, saved.name, "$unpacker")
+                    files.forEach { (path, data) ->
+                        kotlin.test.assertContentEquals(
+                            data,
+                            java.io.File(saved.location, path).readBytes(),
+                            "$unpacker",
+                        )
+                    }
+                    assertEquals(listOf(dir.name), downloads.list()!!.toList(), "no .part files left")
+                    withContext(Dispatchers.IO) { p.waitFor(30, TimeUnit.SECONDS) }
+                    assertEquals(0, p.exitValue())
+                }
             }
         }
 

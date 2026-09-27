@@ -7,6 +7,7 @@ protocol. Send text and files between devices using a short code like `7-guitari
 - Targets: Windows, macOS, Linux, Android, iOS
 - Coroutines-first API.
 - Compatible with the Python `wormhole` CLI.
+- Folders unpack while they download: half the disk space, and no wait for unpacking at the end.
 
 ## Usage
 
@@ -48,6 +49,20 @@ What is supported: text, single files, directories and several files at once (se
 `acceptInto` keeps only the last part of the offered name, so a sender cannot write outside the
 folder. It never overwrites: when a name is taken, it saves `photo (1).jpg`. Data goes to a
 hidden `.part` file first, so a failed transfer leaves nothing behind.
+
+### Unpacking folders
+
+A folder arrives as a zip. By default the library unpacks it while it downloads, so it never
+stores the zip. Other clients, like the Python CLI, save the whole zip first and then unpack it:
+twice the disk space, and a wait at the end.
+
+To save the zip first instead:
+
+```kotlin
+Wormhole(WormholeConfig(folderUnpacker = FolderUnpacker.temporaryFile()))
+```
+
+Or implement `FolderUnpacker` yourself.
 
 ### Other storage (Android MediaStore, iOS, ...)
 

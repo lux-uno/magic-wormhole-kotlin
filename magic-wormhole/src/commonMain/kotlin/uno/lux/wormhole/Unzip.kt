@@ -68,16 +68,6 @@ private class ZipReader(
     private val maxFiles: Int,
     private val checkCancelled: () -> Unit,
 ) {
-    private class Entry(
-        val name: String,
-        val flags: Int,
-        val method: Short,
-        val crc: Int,
-        val compressedSize: Long,
-        val size: Long,
-        val offset: Long,
-    )
-
     private var totalBytes = 0L
 
     fun readAll() {
@@ -110,9 +100,7 @@ private class ZipReader(
         }
     }
 
-    private fun Entry.isDirectory() = name.endsWith('/') || name.endsWith('\\')
-
-    private fun readCentralDirectory(): List<Entry> {
+    private fun readCentralDirectory(): List<CentralEntry> {
         if (size < END_SIZE) throw InvalidZipException("Not a zip file")
         val tailStart = maxOf(0L, size - MAX_TAIL)
         val tail = open(tailStart).buffered().use { it.readByteArray((size - tailStart).toInt()) }
@@ -154,46 +142,17 @@ private class ZipReader(
                 ) {
                     throw InvalidZipException("Damaged central directory")
                 }
-                input.skip(4)
-                val flags = input.readShortLe().toInt() and 0xFFFF
-                val method = input.readShortLe()
-                input.skip(4)
-                val crc = input.readIntLe()
-                var compressedSize = input.readIntLe().toLong() and 0xFFFFFFFFL
-                var uncompressedSize = input.readIntLe().toLong() and 0xFFFFFFFFL
-                val nameLength = input.readShortLe().toInt() and 0xFFFF
-                val extraLength = input.readShortLe().toInt() and 0xFFFF
-                val commentLength = input.readShortLe().toInt() and 0xFFFF
-                input.skip(8)
-                var offset = input.readIntLe().toLong() and 0xFFFFFFFFL
-                val name = input.readByteArray(nameLength).decodeToString()
-                val extra = Buffer().apply { write(input.readByteArray(extraLength)) }
-                input.skip(commentLength.toLong())
-                while (extra.size >= 4) {
-                    val id = extra.readShortLe()
-                    val length = (extra.readShortLe().toInt() and 0xFFFF).toLong()
-                    if (extra.size < length) break
-                    if (id != ZipWriter.ZIP64_EXTRA) {
-                        extra.skip(length)
-                        continue
+                readCentralEntry(input).also {
+                    if (it.offset + it.compressedSize > directoryOffset) {
+                        throw InvalidZipException("Damaged zip: bad entry ${it.name}")
                     }
-                    val field = Buffer().apply { write(extra, length) }
-                    if (uncompressedSize == ZipWriter.MAX_32 && field.size >= 8) uncompressedSize = field.readLongLe()
-                    if (compressedSize == ZipWriter.MAX_32 && field.size >= 8) compressedSize = field.readLongLe()
-                    if (offset == ZipWriter.MAX_32 && field.size >= 8) offset = field.readLongLe()
                 }
-                if (compressedSize < 0 || uncompressedSize < 0 || offset < 0 ||
-                    offset + compressedSize > directoryOffset
-                ) {
-                    throw InvalidZipException("Damaged zip: bad entry $name")
-                }
-                Entry(name, flags, method, crc, compressedSize, uncompressedSize, offset)
             }
         }
     }
 
     private fun extract(
-        entry: Entry,
+        entry: CentralEntry,
         input: Source,
     ) {
         if (entry.flags and FLAG_ENCRYPTED != 0) throw InvalidZipException("Encrypted zip files are not supported")
@@ -239,37 +198,6 @@ private class ZipReader(
         }
     }
 
-    private fun copy(
-        source: Source,
-        write: (ByteArray, Int, Int) -> Unit,
-    ) {
-        val chunk = ByteArray(CHUNK)
-        while (true) {
-            val n = source.readAtMostTo(chunk, 0, chunk.size)
-            if (n == -1) return
-            write(chunk, 0, n)
-        }
-    }
-
-    /** Reads at most [remaining] bytes of [source], and fails if the source ends before that. */
-    private class LimitedSource(
-        private val source: Source,
-        private var remaining: Long,
-    ) : RawSource {
-        override fun readAtMostTo(
-            sink: Buffer,
-            byteCount: Long,
-        ): Long {
-            if (remaining == 0L) return -1
-            val n = source.readAtMostTo(sink, minOf(byteCount, remaining))
-            if (n == -1L) throw InvalidZipException("The zip file ends too early")
-            remaining -= n
-            return n
-        }
-
-        override fun close() = Unit
-    }
-
     private fun ByteArray.intAt(i: Int) =
         (this[i].toInt() and 0xFF) or ((this[i + 1].toInt() and 0xFF) shl 8) or
             ((this[i + 2].toInt() and 0xFF) shl 16) or ((this[i + 3].toInt() and 0xFF) shl 24)
@@ -278,7 +206,6 @@ private class ZipReader(
 
     private companion object {
         const val FLAG_ENCRYPTED = 1
-        const val CHUNK = 64 * 1024
         const val END_SIZE = 22
 
         // End record with the longest comment, plus the Zip64 locator before it.
@@ -291,7 +218,7 @@ private class ZipReader(
  * dropped. Returns null when nothing is left (the entry is the folder itself). Throws for
  * absolute paths, drive letters, `..` and control characters.
  */
-private fun safePath(name: String): String? {
+internal fun safePath(name: String): String? {
     val normalized = name.replace('\\', '/')
     if (normalized.startsWith('/') || normalized.any { it < ' ' } || ':' in normalized) {
         throw InvalidZipException("Unsafe path in zip: $name")
@@ -299,4 +226,86 @@ private fun safePath(name: String): String? {
     val parts = normalized.split('/').filter { it.isNotEmpty() && it != "." }
     if (parts.any { it == ".." }) throw InvalidZipException("Unsafe path in zip: $name")
     return parts.joinToString("/").ifEmpty { null }
+}
+
+internal fun copy(
+    source: Source,
+    write: (ByteArray, Int, Int) -> Unit,
+) {
+    val chunk = ByteArray(64 * 1024)
+    while (true) {
+        val n = source.readAtMostTo(chunk, 0, chunk.size)
+        if (n == -1) return
+        write(chunk, 0, n)
+    }
+}
+
+/** Reads at most [remaining] bytes of [source], and fails if the source ends before that. */
+internal class LimitedSource(
+    private val source: Source,
+    private var remaining: Long,
+) : RawSource {
+    override fun readAtMostTo(
+        sink: Buffer,
+        byteCount: Long,
+    ): Long {
+        if (remaining == 0L) return -1
+        val n = source.readAtMostTo(sink, minOf(byteCount, remaining))
+        if (n == -1L) throw InvalidZipException("The zip file ends too early")
+        remaining -= n
+        return n
+    }
+
+    override fun close() = Unit
+}
+
+/** One entry of the central directory. */
+internal class CentralEntry(
+    val name: String,
+    val flags: Int,
+    val method: Short,
+    val crc: Int,
+    val compressedSize: Long,
+    val size: Long,
+    val offset: Long,
+) {
+    fun isDirectory() = name.endsWith('/') || name.endsWith('\\')
+}
+
+/** Reads one central directory header, after its signature. Resolves Zip64 sizes and offsets. */
+internal fun readCentralEntry(input: Source): CentralEntry {
+    input.skip(4)
+    val flags = input.readShortLe().toInt() and 0xFFFF
+    val method = input.readShortLe()
+    input.skip(4)
+    val crc = input.readIntLe()
+    var compressedSize = input.readIntLe().toLong() and 0xFFFFFFFFL
+    var uncompressedSize = input.readIntLe().toLong() and 0xFFFFFFFFL
+    val nameLength = input.readShortLe().toInt() and 0xFFFF
+    val extraLength = input.readShortLe().toInt() and 0xFFFF
+    val commentLength = input.readShortLe().toInt() and 0xFFFF
+    input.skip(8)
+    var offset = input.readIntLe().toLong() and 0xFFFFFFFFL
+    val name = input.readByteArray(nameLength).decodeToString()
+    val extra = Buffer().apply { write(input.readByteArray(extraLength)) }
+    input.skip(commentLength.toLong())
+    while (extra.size >= 4) {
+        val id = extra.readShortLe()
+        val length = (extra.readShortLe().toInt() and 0xFFFF).toLong()
+        if (extra.size < length) break
+        if (id != ZipWriter.ZIP64_EXTRA) {
+            extra.skip(length)
+            continue
+        }
+        val field = Buffer().apply { write(extra, length) }
+        if (uncompressedSize == ZipWriter.MAX_32 && field.size >= 8) uncompressedSize = field.readLongLe()
+        if (compressedSize == ZipWriter.MAX_32 && field.size >= 8) compressedSize = field.readLongLe()
+        if (offset == ZipWriter.MAX_32 && field.size >= 8) offset = field.readLongLe()
+    }
+    if (compressedSize < 0 || uncompressedSize < 0 ||
+        offset < 0
+    ) {
+        throw InvalidZipException("Damaged zip: bad entry $name")
+    }
+    return CentralEntry(name, flags, method, crc, compressedSize, uncompressedSize, offset)
 }

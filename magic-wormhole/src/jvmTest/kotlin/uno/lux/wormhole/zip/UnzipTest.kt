@@ -20,9 +20,10 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
-class UnzipTest {
+/** Checks [unzip]. [StreamingUnzipTest] runs the same cases through the streaming reader. */
+open class UnzipTest {
     /** Collects what [unzip] writes. */
-    private class MemoryTarget : UnzipTarget {
+    class MemoryTarget : UnzipTarget {
         val files = mutableMapOf<String, Buffer>()
         val directories = mutableListOf<String>()
 
@@ -35,7 +36,7 @@ class UnzipTest {
         fun contents() = files.mapValues { it.value.readByteArray() }
     }
 
-    private val files =
+    protected val files =
         mapOf(
             "a.txt" to "hello".encodeToByteArray(),
             "sub/dir/b.bin" to ByteArray(200_000) { (it % 97).toByte() },
@@ -43,7 +44,7 @@ class UnzipTest {
             "ünïcode/ファイル.txt" to "x".encodeToByteArray(),
         )
 
-    private fun assertFiles(
+    protected fun assertFiles(
         expected: Map<String, ByteArray>,
         target: MemoryTarget,
     ) {
@@ -53,7 +54,7 @@ class UnzipTest {
     }
 
     /** A zip made by the JDK: deflated entries with data descriptors, like Go's archive/zip. */
-    private fun jdkZip(
+    protected fun jdkZip(
         entries: Map<String, ByteArray>,
         directories: List<String> = emptyList(),
     ): ByteArray {
@@ -97,17 +98,18 @@ class UnzipTest {
         return out.toByteArray()
     }
 
-    private suspend fun unzipBytes(
+    protected open suspend fun unzipBytes(
         zip: ByteArray,
         maxBytes: Long = Long.MAX_VALUE,
         maxFiles: Int = Int.MAX_VALUE,
-    ) = MemoryTarget().also { target ->
-        unzip(zip.size.toLong(), { offset ->
-            Buffer().apply {
-                write(zip, offset.toInt(), zip.size)
-            }
-        }, target, maxBytes, maxFiles)
-    }
+    ): MemoryTarget =
+        MemoryTarget().also { target ->
+            unzip(zip.size.toLong(), { offset ->
+                Buffer().apply {
+                    write(zip, offset.toInt(), zip.size)
+                }
+            }, target, maxBytes, maxFiles)
+        }
 
     @Test
     fun readsOwnZips() =

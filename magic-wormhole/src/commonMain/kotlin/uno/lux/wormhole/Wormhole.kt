@@ -53,6 +53,8 @@ public data class WormholeConfig(
     val appId: String = DEFAULT_APP_ID,
     /** Number of words after the nameplate in generated codes. */
     val codeLength: Int = 2,
+    /** How received directories are unpacked. See [FolderUnpacker]. */
+    val folderUnpacker: FolderUnpacker = FolderUnpacker.streaming(),
 ) {
     init {
         require(codeLength >= 1) { "codeLength must be at least 1" }
@@ -99,6 +101,7 @@ public sealed interface ReceiveEvent {
         public val fileCount: Int? = null,
         /** Total size of the files in the directory, if the sender said. Null for a single file. */
         public val unpackedSize: Long? = null,
+        private val unpacker: FolderUnpacker = FolderUnpacker.streaming(),
     ) : ReceiveEvent {
         /**
          * Saves the file with [saver]. A directory is unpacked into a folder of [saver]; with
@@ -109,7 +112,7 @@ public sealed interface ReceiveEvent {
             saver: FileSaver,
             unpack: Boolean = true,
         ) {
-            decision.complete(SaverDestination(saver, this, unpack))
+            decision.complete(SaverDestination(saver, this, unpack, unpacker))
         }
 
         /** Saves the file in [folder], or unpacks the directory into it. See [FileSaver.folder]. */
@@ -383,6 +386,7 @@ public class Wormhole internal constructor(
                 decision,
                 fileCount = directory?.longValue("numfiles")?.toInt(),
                 unpackedSize = directory?.longValue("numbytes"),
+                unpacker = config.folderUnpacker,
             ),
         )
         val destination = decision.await()
@@ -391,26 +395,24 @@ public class Wormhole internal constructor(
             handle.markHappy()
             return@withMailbox
         }
-        val sink =
-            try {
-                destination.open()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                // For example, the disk is full. The CLI answers the same way.
-                session.send(buildJsonObject { put("error", "transfer rejected") })
-                throw e
-            }
+        try {
+            destination.open()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // For example, the disk is full. The CLI answers the same way.
+            session.send(buildJsonObject { put("error", "transfer rejected") })
+            throw e
+        }
         onOpened(destination)
         val network = transitNetwork()
         try {
-            FileTransfer.receive(session, network, relay, senderTransit, size, sink) { received ->
+            FileTransfer.receive(session, network, relay, senderTransit, size, destination::write) { received ->
                 emit(ReceiveEvent.Progress(received, size))
             }
             handle.markHappy()
         } finally {
             network.close()
-            sink.close()
         }
     }
 
