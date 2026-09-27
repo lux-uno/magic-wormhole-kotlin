@@ -79,7 +79,7 @@ class SaverTransferTest {
     private fun entry(
         path: String,
         data: ByteArray,
-    ) = DirectoryEntry(path, data.size.toLong()) { Buffer().apply { write(data) } }
+    ) = OutgoingFile(path, data.size.toLong()) { Buffer().apply { write(data) } }
 
     /** Sends with [send] and receives with [onOffer]. Returns the receiver's events and the sender's error. */
     private suspend fun TestScope.transfer(
@@ -105,7 +105,10 @@ class SaverTransferTest {
     fun fileIsCreatedWrittenAndCommitted() =
         runTest {
             val data = content(50_000)
-            val (events, error) = transfer({ sendFile("photo.jpg", 50_000, Buffer().apply { write(data) }) })
+            val (events, error) =
+                transfer(
+                    { sendFile(OutgoingFile("photo.jpg", 50_000) { Buffer().apply { write(data) } }) },
+                )
 
             assertEquals(null, error)
             assertEquals(listOf("createFile photo.jpg 50000", "commit photo.jpg"), saver.log)
@@ -144,7 +147,7 @@ class SaverTransferTest {
     @Test
     fun offeredNamesAreMadeSafeBeforeTheSaverSeesThem() =
         runTest {
-            transfer({ sendFile("../../evil.txt", 1, Buffer().apply { writeByte(1) }) })
+            transfer({ sendFile(OutgoingFile("../../evil.txt", 1) { Buffer().apply { writeByte(1) } }) })
             assertEquals(listOf("createFile evil.txt 1", "commit evil.txt"), saver.log)
         }
 
@@ -156,7 +159,9 @@ class SaverTransferTest {
             val sender =
                 async {
                     runCatching {
-                        wormhole("10.0.0.1").sendFile("a.txt", 1, Buffer().apply { writeByte(1) }).collect {
+                        wormhole(
+                            "10.0.0.1",
+                        ).sendFile(OutgoingFile("a.txt", 1) { Buffer().apply { writeByte(1) } }).collect {
                             if (it is SendEvent.CodeAllocated) code.complete(it.code)
                         }
                     }
@@ -190,7 +195,11 @@ class SaverTransferTest {
 
                     override fun close() = Unit
                 }
-            assertFailsWith<WormholeException> { transfer({ sendFile("big.bin", 100_000, brokenSource) }) }
+            assertFailsWith<WormholeException> {
+                transfer(
+                    { sendFile(OutgoingFile("big.bin", 100_000) { brokenSource }) },
+                )
+            }
             assertEquals(listOf("createFile big.bin 100000", "discard big.bin"), saver.log)
         }
 }

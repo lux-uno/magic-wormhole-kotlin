@@ -39,10 +39,15 @@ class FileTransferTest {
         val sender =
             async {
                 val events = mutableListOf<SendEvent>()
-                wormhole("10.0.0.1").sendFile("photo.jpg", data.size.toLong(), Buffer().apply { write(data) }).collect {
-                    events += it
-                    if (it is SendEvent.CodeAllocated) code.complete(it.code)
-                }
+                wormhole("10.0.0.1")
+                    .sendFile(
+                        OutgoingFile("photo.jpg", data.size.toLong()) {
+                            Buffer().apply { write(data) }
+                        },
+                    ).collect {
+                        events += it
+                        if (it is SendEvent.CodeAllocated) code.complete(it.code)
+                    }
                 events
             }
         val sink = Buffer()
@@ -76,6 +81,18 @@ class FileTransferTest {
         }
 
     @Test
+    fun fileIsOpenedOnlyWhenTheFlowIsCollected() {
+        var opened = 0
+        Wormhole().sendFile(
+            OutgoingFile("a.txt", 1) {
+                opened++
+                Buffer()
+            },
+        )
+        assertEquals(0, opened)
+    }
+
+    @Test
     fun emptyFileWorks() =
         runTest {
             val (sent, received) = transfer(ByteArray(0))
@@ -92,7 +109,9 @@ class FileTransferTest {
                     runCatching {
                         wormhole(
                             "10.0.0.1",
-                        ).sendFile("a.txt", 3, Buffer().apply { write(byteArrayOf(1, 2, 3)) }).collect {
+                        ).sendFile(
+                            OutgoingFile("a.txt", 3) { Buffer().apply { write(byteArrayOf(1, 2, 3)) } },
+                        ).collect {
                             if (it is SendEvent.CodeAllocated) code.complete(it.code)
                         }
                     }
@@ -109,7 +128,7 @@ class FileTransferTest {
     private fun entry(
         path: String,
         data: ByteArray,
-    ) = DirectoryEntry(path, data.size.toLong()) { Buffer().apply { write(data) } }
+    ) = OutgoingFile(path, data.size.toLong()) { Buffer().apply { write(data) } }
 
     @Test
     fun directoryGoesFromSenderToReceiverAsAZip() =

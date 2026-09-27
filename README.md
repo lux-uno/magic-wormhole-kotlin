@@ -72,11 +72,12 @@ When the data does not come from a `Path` (for example an Android `content://` U
 stream versions:
 
 ```kotlin
-// Send `size` bytes from a source. The library closes it.
-wormhole.sendFile("photo.jpg", size, source)
+// `open` returns a new source each time; the library opens it only when the transfer runs.
+val photo = OutgoingFile("beach.jpg", size) { openBeach() }
+wormhole.sendFile(photo)
 
-// Send several files as a folder. `open` is called twice (checksum pass, then send).
-wormhole.sendDirectory("holiday", listOf(DirectoryEntry("beach.jpg", size) { openBeach() }))
+// Several files as a folder. Names are paths inside it. Each file is opened twice (checksum, then send).
+wormhole.sendDirectory("holiday", listOf(photo, OutgoingFile("day 2/sea.jpg", seaSize) { openSea() }))
 
 // Receive into any sink. A directory then arrives as `<name>.zip` with isDirectory = true.
 event.accept(sink)

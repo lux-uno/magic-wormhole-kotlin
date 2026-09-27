@@ -56,9 +56,9 @@ private class FolderUnzipTarget(
 }
 
 /** The files in [folder] and its subfolders, with paths relative to [folder]. */
-internal fun filesIn(folder: Path): List<DirectoryEntry> {
+internal fun filesIn(folder: Path): List<OutgoingFile> {
     require(SystemFileSystem.metadataOrNull(folder)?.isDirectory == true) { "Not a folder: $folder" }
-    val entries = mutableListOf<DirectoryEntry>()
+    val entries = mutableListOf<OutgoingFile>()
     val visited = mutableSetOf<Path>()
 
     fun walk(
@@ -77,7 +77,7 @@ internal fun filesIn(folder: Path): List<DirectoryEntry> {
 
                 metadata.isRegularFile -> {
                     entries +=
-                        DirectoryEntry(path, metadata.size) { SystemFileSystem.source(child) }
+                        OutgoingFile(path, metadata.size) { SystemFileSystem.source(child) }
                 }
             }
         }

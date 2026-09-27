@@ -98,12 +98,8 @@ class InteropTest {
                 val sender =
                     async {
                         Wormhole()
-                            .sendFile(
-                                "data.bin",
-                                file.length(),
-                                kotlinx.io.files.SystemFileSystem
-                                    .source(kotlinx.io.files.Path(file.path)),
-                            ).collect { if (it is SendEvent.CodeAllocated) code.complete(it.code) }
+                            .sendFile(kotlinx.io.files.Path(file.path), name = "data.bin")
+                            .collect { if (it is SendEvent.CodeAllocated) code.complete(it.code) }
                     }
                 withContext(Dispatchers.IO) {
                     val p = cli("receive", "--hide-progress", "--accept-file", "--output-file", out.path, code.await())
@@ -167,7 +163,7 @@ class InteropTest {
                             .sendDirectory(
                                 "holiday",
                                 files.map { (path, data) ->
-                                    DirectoryEntry(
+                                    OutgoingFile(
                                         path,
                                         data.size.toLong(),
                                     ) { kotlinx.io.Buffer().apply { write(data) } }
@@ -275,8 +271,9 @@ class InteropTest {
                 val sender =
                     async {
                         Wormhole(WormholeConfig(), uno.lux.wormhole.rendezvous.WebSocketTransport, ::relayOnlyNetwork)
-                            .sendFile("r.bin", data.size.toLong(), kotlinx.io.Buffer().apply { write(data) })
-                            .collect { if (it is SendEvent.CodeAllocated) code.complete(it.code) }
+                            .sendFile(
+                                OutgoingFile("r.bin", data.size.toLong()) { kotlinx.io.Buffer().apply { write(data) } },
+                            ).collect { if (it is SendEvent.CodeAllocated) code.complete(it.code) }
                     }
                 val sink = kotlinx.io.Buffer()
                 Wormhole(WormholeConfig(), uno.lux.wormhole.rendezvous.WebSocketTransport, ::relayOnlyNetwork)

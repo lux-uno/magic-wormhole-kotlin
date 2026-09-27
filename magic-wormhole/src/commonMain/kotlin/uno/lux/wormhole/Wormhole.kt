@@ -150,18 +150,22 @@ public sealed interface ReceiveEvent {
 }
 
 /**
- * One file of a directory sent with [Wormhole.sendDirectory]. [path] is relative to the
- * directory and uses `/` between folders, for example `photos/2024/beach.jpg`. [open] returns
- * a new source with the [size] bytes of the file each time it is called; the library closes it.
+ * A file to send. [open] returns a new source with the [size] bytes of the file each time it is
+ * called; the library calls it only when the transfer runs, and closes the source.
+ *
+ * For [Wormhole.sendFile], [name] is the file name. For [Wormhole.sendDirectory], it is the path
+ * inside the directory, with `/` between folders, for example `photos/2024/beach.jpg`.
  */
-public class DirectoryEntry(
-    public val path: String,
+public class OutgoingFile(
+    public val name: String,
     public val size: Long,
     public val open: () -> RawSource,
 ) {
     init {
-        require(size >= 0) { "Negative size for $path" }
+        require(size >= 0) { "Negative size for $name" }
     }
+
+    override fun toString(): String = "OutgoingFile(name=$name, size=$size)"
 
     internal fun checksummed(): ZipFileEntry {
         val crc = Crc32()
@@ -169,7 +173,7 @@ public class DirectoryEntry(
         open().use { source ->
             while (source.readAtMostTo(buffer, CHUNK) != -1L) crc.update(buffer.readByteArray())
         }
-        return ZipFileEntry(path, size, crc.value, open)
+        return ZipFileEntry(name, size, crc.value, open)
     }
 
     internal companion object {
@@ -226,21 +230,19 @@ public class Wormhole internal constructor(
         flow {
             val metadata = SystemFileSystem.metadataOrNull(path)
             if (metadata == null || !metadata.isRegularFile) throw FileNotFoundException("No file at $path")
-            emitAll(sendFile(name, metadata.size, SystemFileSystem.source(path)))
+            emitAll(sendFile(OutgoingFile(name, metadata.size) { SystemFileSystem.source(path) }))
         }
 
     /**
-     * Sends [size] bytes from [source] as a file called [name]. Use this when the data is not a
-     * file on the file system, for example an Android `content://` URI. Emits
+     * Sends [file]. Use this when the data is not a file on the file system, for example an
+     * Android `content://` URI. Emits
      * [SendEvent.CodeAllocated], [SendEvent.Progress] updates, then [SendEvent.Completed].
-     * The library closes [source] when the transfer ends.
      */
-    public fun sendFile(
-        name: String,
-        size: Long,
-        source: RawSource,
-    ): Flow<SendEvent> =
+    public fun sendFile(file: OutgoingFile): Flow<SendEvent> =
         flow {
+            val name = file.name
+            val size = file.size
+            val source = file.open()
             try {
                 coroutineScope {
                     withSenderMailbox(this) { handle, session ->
@@ -278,30 +280,30 @@ public class Wormhole internal constructor(
     ): Flow<SendEvent> = flow { emitAll(sendDirectory(name, filesIn(path))) }
 
     /**
-     * Sends [entries] as a directory called [name], the way `wormhole send <dir>` does: as a zip
+     * Sends [files] as a directory called [name], the way `wormhole send <dir>` does: as a zip
      * that the receiver unpacks into a folder called [name]. Use this to send several files at
-     * once. Each entry's source is read twice (once for its checksum, once to send it), so
-     * [DirectoryEntry.open] must return the same bytes each time. Emits the same events as
+     * once. Each file is read twice (once for its checksum, once to send it), so
+     * [OutgoingFile.open] must return the same bytes each time. Emits the same events as
      * [sendFile]; progress counts bytes of the zip.
      */
     public fun sendDirectory(
         name: String,
-        entries: List<DirectoryEntry>,
+        files: List<OutgoingFile>,
     ): Flow<SendEvent> {
         require(name.isNotEmpty() && '/' !in name && '\\' !in name && name != "." && name != "..") {
             "Invalid directory name: \"$name\""
         }
-        entries.forEach { DirectoryEntry.checkPath(it.path) }
-        val duplicate = entries.groupBy { it.path }.values.firstOrNull { it.size > 1 }
-        require(duplicate == null) { "Duplicate path: ${duplicate?.first()?.path}" }
+        files.forEach { OutgoingFile.checkPath(it.name) }
+        val duplicate = files.groupBy { it.name }.values.firstOrNull { it.size > 1 }
+        require(duplicate == null) { "Duplicate path: ${duplicate?.first()?.name}" }
         return flow {
             coroutineScope {
                 // Checksum the files while the receiver types the code.
-                val zip = async { ZipWriter(entries.map { it.checksummed() }) }
+                val zip = async { ZipWriter(files.map { it.checksummed() }) }
                 withSenderMailbox(this) { handle, session ->
                     val writer = zip.await()
                     val offer =
-                        FileTransfer.directoryOffer(name, writer.size, entries.sumOf { it.size }, entries.size)
+                        FileTransfer.directoryOffer(name, writer.size, files.sumOf { it.size }, files.size)
                     val source = writer.source()
                     val network = transitNetwork()
                     try {

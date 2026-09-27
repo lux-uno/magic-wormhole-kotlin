@@ -156,7 +156,7 @@ class PathTransferTest {
         val writer =
             uno.lux.wormhole.zip.ZipWriter(
                 files.map { (path, data) ->
-                    DirectoryEntry(path, data.size.toLong()) { kotlinx.io.Buffer().apply { write(data) } }.checksummed()
+                    OutgoingFile(path, data.size.toLong()) { kotlinx.io.Buffer().apply { write(data) } }.checksummed()
                 },
             )
         return writer.source().buffered().use { it.readByteArray() }
