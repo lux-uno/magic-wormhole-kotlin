@@ -136,22 +136,7 @@ internal class ZipWriter(
     ) {
         val count = entries.size.toLong()
         val zip64 = forceZip64 || count >= 0xFFFF || isLarge(centralOffset) || isLarge(centralSize)
-        if (zip64) {
-            out.writeIntLe(END64)
-            out.writeLongLe(44) // size of the rest of this record
-            out.writeShortLe(VERSION_ZIP64)
-            out.writeShortLe(VERSION_ZIP64)
-            out.writeIntLe(0)
-            out.writeIntLe(0)
-            out.writeLongLe(count)
-            out.writeLongLe(count)
-            out.writeLongLe(centralSize)
-            out.writeLongLe(centralOffset)
-            out.writeIntLe(END64_LOCATOR)
-            out.writeIntLe(0)
-            out.writeLongLe(centralOffset + centralSize)
-            out.writeIntLe(1)
-        }
+        if (zip64) writeZip64End(count, centralOffset, centralSize, out)
         out.writeIntLe(END)
         out.writeShortLe(0)
         out.writeShortLe(0)
@@ -160,6 +145,29 @@ internal class ZipWriter(
         out.writeIntLe(if (zip64) -1 else centralSize.toInt())
         out.writeIntLe(if (zip64) -1 else centralOffset.toInt())
         out.writeShortLe(0)
+    }
+
+    /** Writes the Zip64 end record and the locator that points to it. */
+    private fun writeZip64End(
+        count: Long,
+        centralOffset: Long,
+        centralSize: Long,
+        out: Buffer,
+    ) {
+        out.writeIntLe(END64)
+        out.writeLongLe(44) // size of the rest of this record
+        out.writeShortLe(VERSION_ZIP64)
+        out.writeShortLe(VERSION_ZIP64)
+        out.writeIntLe(0)
+        out.writeIntLe(0)
+        out.writeLongLe(count)
+        out.writeLongLe(count)
+        out.writeLongLe(centralSize)
+        out.writeLongLe(centralOffset)
+        out.writeIntLe(END64_LOCATOR)
+        out.writeIntLe(0)
+        out.writeLongLe(centralOffset + centralSize)
+        out.writeIntLe(1)
     }
 
     /** Reads one file and fails if its size or CRC changed since it was measured. */

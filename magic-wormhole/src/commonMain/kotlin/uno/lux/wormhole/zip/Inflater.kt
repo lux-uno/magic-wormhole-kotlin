@@ -117,17 +117,26 @@ internal class Inflater(
                 }
 
                 else -> {
-                    val index = symbol - 257
-                    if (index >= LENGTH_BASE.size) throw InvalidZipException("Invalid length code")
-                    val length = LENGTH_BASE[index] + bits(LENGTH_EXTRA[index])
-                    val distanceSymbol = decode(distances)
-                    if (distanceSymbol >= DISTANCE_BASE.size) throw InvalidZipException("Invalid distance code")
-                    val distance = DISTANCE_BASE[distanceSymbol] + bits(DISTANCE_EXTRA[distanceSymbol])
-                    if (distance > total) throw InvalidZipException("Distance too far back")
-                    repeat(length) { put(window[(position - distance) and (WINDOW_SIZE - 1)], output) }
+                    copyMatch(symbol, distances, output)
                 }
             }
         }
+    }
+
+    /** Copies earlier output again: a length from [lengthSymbol], then a distance back. */
+    private fun copyMatch(
+        lengthSymbol: Int,
+        distances: Huffman,
+        output: (ByteArray, Int, Int) -> Unit,
+    ) {
+        val index = lengthSymbol - 257
+        if (index >= LENGTH_BASE.size) throw InvalidZipException("Invalid length code")
+        val length = LENGTH_BASE[index] + bits(LENGTH_EXTRA[index])
+        val distanceSymbol = decode(distances)
+        if (distanceSymbol >= DISTANCE_BASE.size) throw InvalidZipException("Invalid distance code")
+        val distance = DISTANCE_BASE[distanceSymbol] + bits(DISTANCE_EXTRA[distanceSymbol])
+        if (distance > total) throw InvalidZipException("Distance too far back")
+        repeat(length) { put(window[(position - distance) and (WINDOW_SIZE - 1)], output) }
     }
 
     private fun dynamic(output: (ByteArray, Int, Int) -> Unit) {
@@ -135,11 +144,28 @@ internal class Inflater(
         val distanceCount = bits(5) + 1
         val codeLengthCount = bits(4) + 4
         if (literalCount > 286 || distanceCount > 30) throw InvalidZipException("Too many deflate codes")
-        val codeLengthLengths = IntArray(19)
-        for (i in 0 until codeLengthCount) codeLengthLengths[CODE_LENGTH_ORDER[i]] = bits(3)
-        val codeLengthCode = Huffman(codeLengthLengths)
+        val lengths = readCodeLengths(literalCount + distanceCount, readCodeLengthCode(codeLengthCount))
+        if (lengths[256] == 0) throw InvalidZipException("No end-of-block code")
+        codes(
+            Huffman(lengths.copyOfRange(0, literalCount)),
+            Huffman(lengths.copyOfRange(literalCount, lengths.size)),
+            output,
+        )
+    }
 
-        val lengths = IntArray(literalCount + distanceCount)
+    /** The code that the lengths of the literal and distance codes are written in. */
+    private fun readCodeLengthCode(count: Int): Huffman {
+        val lengths = IntArray(19)
+        for (i in 0 until count) lengths[CODE_LENGTH_ORDER[i]] = bits(3)
+        return Huffman(lengths)
+    }
+
+    /** Reads [count] code lengths, expanding the repeat symbols 16, 17 and 18. */
+    private fun readCodeLengths(
+        count: Int,
+        codeLengthCode: Huffman,
+    ): IntArray {
+        val lengths = IntArray(count)
         var i = 0
         while (i < lengths.size) {
             val symbol = decode(codeLengthCode)
@@ -165,12 +191,7 @@ internal class Inflater(
             if (i + repeat > lengths.size) throw InvalidZipException("Too many code lengths")
             repeat(repeat) { lengths[i++] = value }
         }
-        if (lengths[256] == 0) throw InvalidZipException("No end-of-block code")
-        codes(
-            Huffman(lengths.copyOfRange(0, literalCount)),
-            Huffman(lengths.copyOfRange(literalCount, lengths.size)),
-            output,
-        )
+        return lengths
     }
 
     /**

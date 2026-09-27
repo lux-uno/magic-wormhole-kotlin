@@ -85,16 +85,15 @@ internal data class TransitHints(
                     "hints-v1",
                     buildJsonArray {
                         direct.forEach { add(it.toJson()) }
-                        if (relay != null) {
-                            add(
-                                buildJsonObject {
-                                    put("type", "relay-v1")
-                                    put("hints", buildJsonArray { add(relay.toJson()) })
-                                },
-                            )
-                        }
+                        if (relay != null) add(relayHint(relay))
                     },
                 )
+            }
+
+        private fun relayHint(relay: DirectHint): JsonObject =
+            buildJsonObject {
+                put("type", "relay-v1")
+                put("hints", buildJsonArray { add(relay.toJson()) })
             }
     }
 }

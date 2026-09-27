@@ -78,56 +78,70 @@ private class FolderSaver(
         fileSystem.createDirectories(directory)
         val safeName = safeFileName(name)
         val partial = uniquePath(".$safeName.part")
-        val sink = fileSystem.sink(partial)
-        return object : IncomingFile {
-            override val sink: RawSink = sink
-
-            override suspend fun commit(): SavedFile {
-                closeQuietly()
-                val target = uniquePath(safeName)
-                fileSystem.atomicMove(partial, target)
-                return SavedFile(target.name, target.toString())
-            }
-
-            override suspend fun discard() {
-                closeQuietly()
-                fileSystem.delete(partial, mustExist = false)
-            }
-
-            private fun closeQuietly() {
-                try {
-                    sink.close()
-                } catch (_: Exception) {
-                }
-            }
-        }
+        return PartialFile(fileSystem.sink(partial), partial, safeName)
     }
 
     override suspend fun createFolder(name: String): IncomingFolder {
         val safeName = safeFileName(name)
         val partial = uniquePath(".$safeName.part")
         fileSystem.createDirectories(partial)
-        return object : IncomingFolder {
-            override fun createDirectory(path: String) {
-                fileSystem.createDirectories(resolve(path))
-            }
+        return PartialFolder(partial, safeName)
+    }
 
-            override fun createFile(path: String): RawSink {
-                val file = resolve(path)
-                file.parent?.let(fileSystem::createDirectories)
-                return fileSystem.sink(file)
-            }
+    /** Moves [partial] to [name], or to a numbered name when [name] is taken. */
+    private fun moveToFinalName(
+        partial: Path,
+        name: String,
+    ): SavedFile {
+        val target = uniquePath(name)
+        fileSystem.atomicMove(partial, target)
+        return SavedFile(target.name, target.toString())
+    }
 
-            override suspend fun commit(): SavedFile {
-                val target = uniquePath(safeName)
-                fileSystem.atomicMove(partial, target)
-                return SavedFile(target.name, target.toString())
-            }
-
-            override suspend fun discard() = deleteRecursively(partial)
-
-            private fun resolve(path: String): Path = Path(partial, *path.split('/').map(::safePathPart).toTypedArray())
+    /** A file written to [partial] that gets the name [name] on commit. */
+    private inner class PartialFile(
+        override val sink: RawSink,
+        private val partial: Path,
+        private val name: String,
+    ) : IncomingFile {
+        override suspend fun commit(): SavedFile {
+            closeQuietly()
+            return moveToFinalName(partial, name)
         }
+
+        override suspend fun discard() {
+            closeQuietly()
+            fileSystem.delete(partial, mustExist = false)
+        }
+
+        private fun closeQuietly() {
+            try {
+                sink.close()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /** A folder unpacked into [partial] that gets the name [name] on commit. */
+    private inner class PartialFolder(
+        private val partial: Path,
+        private val name: String,
+    ) : IncomingFolder {
+        override fun createDirectory(path: String) {
+            fileSystem.createDirectories(resolve(path))
+        }
+
+        override fun createFile(path: String): RawSink {
+            val file = resolve(path)
+            file.parent?.let(fileSystem::createDirectories)
+            return fileSystem.sink(file)
+        }
+
+        override suspend fun commit(): SavedFile = moveToFinalName(partial, name)
+
+        override suspend fun discard() = deleteRecursively(partial)
+
+        private fun resolve(path: String): Path = Path(partial, *path.split('/').map(::safePathPart).toTypedArray())
     }
 
     private fun deleteRecursively(path: Path) {
