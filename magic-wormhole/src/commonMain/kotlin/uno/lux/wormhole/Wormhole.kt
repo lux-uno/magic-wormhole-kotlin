@@ -126,8 +126,14 @@ public sealed interface ReceiveEvent {
         val totalBytes: Long,
     ) : ReceiveEvent
 
-    /** The whole file was received and verified. This is the last event. */
-    public data object FileReceived : ReceiveEvent
+    /**
+     * The whole file was received and verified. This is the last event. [path] is where
+     * [FileOffered.acceptInto] saved the file or unpacked the directory, or null after
+     * [FileOffered.accept].
+     */
+    public data class FileReceived(
+        val path: Path?,
+    ) : ReceiveEvent
 }
 
 /**
@@ -371,8 +377,7 @@ public class Wormhole internal constructor(
                         sink.close()
                         if (handle.mood != "happy") destination.discard()
                     }
-                    destination.finish()
-                    emit(ReceiveEvent.FileReceived)
+                    emit(ReceiveEvent.FileReceived(destination.finish()))
                 }
             }
         }

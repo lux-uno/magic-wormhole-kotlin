@@ -37,7 +37,7 @@ wormhole.receive("7-guitarist-revenge").collect { event ->
         // Saves Downloads/photo.jpg, or unpacks a folder into Downloads/holiday. Or call event.reject().
         is ReceiveEvent.FileOffered -> event.acceptInto(Path("Downloads"))
         is ReceiveEvent.Progress -> println("${event.receivedBytes} / ${event.totalBytes}")
-        ReceiveEvent.FileReceived -> println("Done")
+        is ReceiveEvent.FileReceived -> println("Saved to ${event.path}")
     }
 }
 ```

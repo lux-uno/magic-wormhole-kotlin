@@ -61,6 +61,8 @@ class PathTransferTest {
 
     private fun content(size: Int) = ByteArray(size) { (it * 31 + 7).toByte() }
 
+    private val received = mutableListOf<ReceiveEvent>()
+
     /** Sends with [send], receives into [inbox], and returns the sender's error, if any. */
     private suspend fun TestScope.transfer(send: Wormhole.() -> kotlinx.coroutines.flow.Flow<SendEvent>): Throwable? {
         val code = CompletableDeferred<String>()
@@ -71,6 +73,7 @@ class PathTransferTest {
                 }
             }
         wormhole("10.0.0.2").receive(code.await()).collect { event ->
+            received += event
             if (event is ReceiveEvent.FileOffered) event.acceptInto(inbox)
         }
         return sender.await().exceptionOrNull()
@@ -85,6 +88,7 @@ class PathTransferTest {
             assertNull(transfer { sendFile(Path(outbox, "photo.jpg")) })
 
             assertContentEquals(data, read(Path(inbox, "photo.jpg")))
+            assertEquals(ReceiveEvent.FileReceived(Path(inbox, "photo.jpg")), received.last())
             assertEquals(listOf("photo.jpg"), SystemFileSystem.list(inbox).map { it.name })
         }
 
@@ -106,6 +110,7 @@ class PathTransferTest {
             assertNull(transfer { sendDirectory(folder) })
 
             assertContentEquals(content(1000), read(Path(inbox, "holiday", "a.txt")))
+            assertEquals(ReceiveEvent.FileReceived(Path(inbox, "holiday")), received.last())
             assertContentEquals(content(70_000), read(Path(inbox, "holiday", "sub", "deeper", "b.bin")))
             assertEquals(listOf("holiday"), SystemFileSystem.list(inbox).map { it.name })
         }

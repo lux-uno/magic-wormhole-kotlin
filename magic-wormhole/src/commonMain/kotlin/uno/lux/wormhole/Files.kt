@@ -89,8 +89,8 @@ internal interface Destination {
     /** Opens the sink for the received bytes. */
     fun open(): RawSink
 
-    /** Called after all bytes arrived and the sink was closed. */
-    suspend fun finish() = Unit
+    /** Called after all bytes arrived and the sink was closed. Returns where the file was saved, if known. */
+    suspend fun finish(): Path? = null
 
     /** Called when the transfer failed after [open]. */
     fun discard() = Unit
@@ -123,16 +123,17 @@ internal class FolderDestination(
         return SystemFileSystem.sink(part)
     }
 
-    override suspend fun finish() {
+    override suspend fun finish(): Path {
         if (!offer.isDirectory) {
             SystemFileSystem.atomicMove(part, target)
-            return
+            return target
         }
         try {
             unzip(part, target, offer.unpackedSize ?: Long.MAX_VALUE, offer.fileCount ?: Int.MAX_VALUE)
         } finally {
             discard()
         }
+        return target
     }
 
     override fun discard() = SystemFileSystem.delete(part, mustExist = false)

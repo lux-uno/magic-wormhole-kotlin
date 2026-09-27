@@ -72,7 +72,7 @@ class FileTransferTest {
             assertEquals(false, offer.isDirectory)
             assertEquals(null, offer.fileCount)
             assertEquals(ReceiveEvent.Progress(200_000, 200_000), received[received.size - 2])
-            assertEquals(ReceiveEvent.FileReceived, received.last())
+            assertEquals(ReceiveEvent.FileReceived(path = null), received.last())
         }
 
     @Test
@@ -80,7 +80,7 @@ class FileTransferTest {
         runTest {
             val (sent, received) = transfer(ByteArray(0))
             assertEquals(SendEvent.Completed, sent.last())
-            assertEquals(ReceiveEvent.FileReceived, received.last())
+            assertEquals(ReceiveEvent.FileReceived(path = null), received.last())
         }
 
     @Test
@@ -140,7 +140,7 @@ class FileTransferTest {
             assertEquals(2, offer.fileCount)
             assertEquals(71_000, offer.unpackedSize)
             assertEquals(offer.size, sink.size)
-            assertEquals(ReceiveEvent.FileReceived, received.last())
+            assertEquals(ReceiveEvent.FileReceived(path = null), received.last())
 
             val unpacked = mutableMapOf<String, Buffer>()
             val zip = sink.readByteArray()

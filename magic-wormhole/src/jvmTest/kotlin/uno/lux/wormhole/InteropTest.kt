@@ -138,7 +138,7 @@ class InteropTest {
                 }
                 val offer = events.first() as ReceiveEvent.FileOffered
                 assertEquals(file.name, offer.name)
-                assertEquals(ReceiveEvent.FileReceived, events.last())
+                assertEquals(ReceiveEvent.FileReceived(path = null), events.last())
                 kotlin.test.assertContentEquals(file.readBytes(), sink.readByteArray())
                 withContext(Dispatchers.IO) { p.waitFor(30, TimeUnit.SECONDS) }
                 assertEquals(0, p.exitValue())
