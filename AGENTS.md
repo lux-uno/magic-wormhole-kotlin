@@ -5,7 +5,7 @@ Guidance for AI agents and humans working on magic-wormhole-kotlin.
 ## Project
 
 A standalone, MIT-licensed Kotlin Multiplatform library for the Magic Wormhole protocol. It must
-stay usable by anyone: no app code, no Compose, no dependency on the Super Massive Wormhole app.
+stay usable by anyone: no app code, no Compose, no dependency on the Wormhole Rift app.
 The public API is small and documented; everything else is `internal` (`explicitApi()` is on).
 
 ## Development workflow: tests first
