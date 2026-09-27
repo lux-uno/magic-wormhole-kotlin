@@ -30,8 +30,6 @@ Every function returns a cold `Flow` of events. The transfer starts when you col
 and stops when you stop collecting it. Failures are thrown from `collect` as
 [`WormholeException`](#handle-errors) subclasses.
 
-Paths are [`kotlinx.io.files.Path`](https://kotlinlang.org/api/kotlinx-io/kotlinx-io-core/kotlinx.io.files/-path/).
-
 ## Send text
 
 ```kotlin
@@ -103,16 +101,21 @@ wormhole.sendFile(context.outgoingFile(uri)).collect { println(it) }
 
 `open` is called only when the transfer runs, and the library closes the stream.
 
-## Receive on desktop
+## Receive data
 
 ```kotlin
 wormhole.receive("7-guitarist-revenge").collect { event ->
     when (event) {
-        is ReceiveEvent.TextReceived -> println(event.text)
-        is ReceiveEvent.FileOffered -> event.acceptInto(Path(System.getProperty("user.home"), "Downloads"))
-        is ReceiveEvent.Progress -> println("${event.receivedBytes} / ${event.totalBytes} bytes")
-        ReceiveEvent.Unpacking -> println("Unpacking the folder")
-        is ReceiveEvent.FileReceived -> println("Saved to ${event.saved?.location}")
+        is ReceiveEvent.TextReceived ->
+            println(event.text)
+        is ReceiveEvent.FileOffered ->
+            event.acceptInto(Path(System.getProperty("user.home"), "Downloads"))
+        is ReceiveEvent.Progress ->
+            println("${event.receivedBytes} / ${event.totalBytes} bytes")
+        ReceiveEvent.Unpacking ->
+            println("Unpacking the folder")
+        is ReceiveEvent.FileReceived ->
+            println("Saved to ${event.saved?.location}")
     }
 }
 ```
@@ -144,11 +147,18 @@ wormhole.receive(code).collect { event ->
 
 After `reject()`, the sender gets a `TransferRejectedException` and the flow completes.
 
-## Receive on Android with a custom `FileSaver`
+## Receive on Android with a custom FileSaver
 
-Android apps save to the shared Downloads collection through MediaStore, which has no `Path`.
-Implement `FileSaver`, and the library still does the rest: safe names, unpacking folders, and
-calling `discard()` when a transfer fails or is cancelled.
+**On Android 8 and 9**, use:
+
+```kotlin
+FileSaver.folder(Path(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)!!.path))
+```
+
+**On Android 10+** apps save to the shared Downloads collection through MediaStore, which has no `Path`.
+You'll have to implement a `FileSaver`.
+
+The library still does the rest: safe names, unpacking folders, and calling `discard()` when a transfer fails or is cancelled.
 
 ```kotlin
 /** Saves into Downloads through MediaStore (Android 10 and later). */
@@ -226,8 +236,6 @@ What the library promises a `FileSaver`:
   checked, or `discard()` otherwise.
 - Errors thrown by the saver reach you as `SaveFailedException`.
 
-On Android 8 and 9, use `FileSaver.folder(Path(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)!!.path))`.
-
 To keep a received folder as a zip instead of unpacking it: `event.acceptInto(saver, unpack = false)`.
 It is then saved as the file `<name>.zip`.
 
@@ -245,6 +253,11 @@ unzip(
     maxFiles = offer.fileCount ?: Int.MAX_VALUE,
 )
 ```
+
+`sendDirectory` writes an uncompressed (stored) zip whose size is known before sending, so no
+temporary file is needed. `unzip` reads stored and deflated zips (including Zip64 and the
+streamed zips of the `wormhole` CLI), rejects paths that leave the target folder, checks every
+CRC, and stops when the zip holds more than the announced bytes or files.
 
 ## Choose a `FolderUnpacker`
 
@@ -288,7 +301,9 @@ Both sides must use the same rendezvous server and `appId`.
 Cancel the coroutine that collects the flow:
 
 ```kotlin
-val job = scope.launch { wormhole.receive(code).collect { /* ... */ } }
+val job = scope.launch {
+    wormhole.receive(code).collect { /* ... */ }
+}
 // later
 job.cancel()
 ```
