@@ -13,6 +13,7 @@ public class InvalidCodeException(
 
 /** The mailbox server reported an error, for example `crowded` or a welcome error. */
 public class WormholeServerException(
+    /** The error text reported by the server. */
     public val serverError: String,
 ) : WormholeException("Wormhole server error: $serverError")
 
@@ -24,6 +25,7 @@ public class TransferRejectedException : WormholeException("The receiver rejecte
 
 /** The other side stopped with an error message. */
 public class PeerErrorException(
+    /** The error text reported by the other side. */
     public val peerMessage: String,
 ) : WormholeException("The other side reported an error: $peerMessage")
 

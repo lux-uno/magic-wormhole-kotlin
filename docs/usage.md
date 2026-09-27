@@ -1,6 +1,7 @@
 # Using magic-wormhole-kotlin
 
-Task-based examples. For installation, see the [README](../README.md).
+Task-based examples. For installation, see the [README](../README.md). For every public class and
+function, see the [API reference](https://lux-uno.github.io/magic-wormhole-kotlin/).
 
 - [Basics](#basics)
 - [Send text](#send-text)

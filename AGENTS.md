@@ -35,6 +35,12 @@ so `commonTest` can run full transfers in memory.
 - `docs/usage.md`: task-based examples. Update it when the public API changes.
 - `plans/`: plans for larger work, for example `plans/dokka-api-docs.md`.
 
+Public API changes need KDoc; check with `./gradlew :magic-wormhole:dokkaGeneratePublicationHtml`
+(warns about undocumented public declarations). The generated site is published to
+[lux-uno.github.io/magic-wormhole-kotlin](https://lux-uno.github.io/magic-wormhole-kotlin/) on
+each release tag; see "Releases" below. Keep `magic-wormhole/Module.md` up to date too: update its
+package list when a package is added, removed, or renamed.
+
 ## Code style
 
 - ktlint (`ktlint_official`) via the `org.jlleitschuh.gradle.ktlint` plugin; rules in `.editorconfig`.

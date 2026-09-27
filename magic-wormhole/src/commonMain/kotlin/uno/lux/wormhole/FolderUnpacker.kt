@@ -41,6 +41,7 @@ public interface FolderUnpacker {
         maxFiles: Int,
     ): ZipReceiver
 
+    /** Factory functions for built-in [FolderUnpacker] implementations. */
     public companion object {
         /** Unpacks while the data arrives. */
         public fun streaming(): FolderUnpacker = StreamingUnpacker

@@ -1,0 +1,54 @@
+# Builds the API reference with Dokka and publishes it with GitHub Pages, for each release tag.
+# To publish again without a new release (for example after a failed run), start the workflow by
+# hand and pick the tag under "Use workflow from".
+name: API docs
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+# One deployment at a time; a newer tag replaces a waiting one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check that the tag matches the version
+        run: |
+          version=$(grep '^VERSION_NAME=' gradle.properties | cut -d= -f2)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::$GITHUB_REF_NAME does not match VERSION_NAME=$version in gradle.properties"
+            exit 1
+          fi
+      - uses: actions/setup-java@v5
+        with:
+          distribution: zulu
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Dokka
+        run: ./gradlew :magic-wormhole:dokkaGeneratePublicationHtml
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: magic-wormhole/build/dokka/html
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

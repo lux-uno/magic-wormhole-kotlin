@@ -47,9 +47,11 @@ public const val DEFAULT_APP_ID: String = "lothar.com/wormhole/text-or-file-xfer
 
 /** Settings for a [Wormhole]. The defaults are compatible with the `wormhole` CLI. */
 public data class WormholeConfig(
+    /** URL of the mailbox server, for example `wss://relay.magic-wormhole.io/v1`. */
     val rendezvousUrl: String = DEFAULT_RENDEZVOUS_URL,
     /** Transit relay as `tcp:host:port`, or null to use direct connections only. */
     val transitRelay: String? = DEFAULT_TRANSIT_RELAY,
+    /** Identifies the application to the mailbox server; must match on both sides. */
     val appId: String = DEFAULT_APP_ID,
     /** Number of words after the nameplate in generated codes. */
     val codeLength: Int = 2,
@@ -66,12 +68,16 @@ public data class WormholeConfig(
 public sealed interface SendEvent {
     /** Give this code to the receiver. */
     public data class CodeAllocated(
+        /** The wormhole code, for example `7-crossover-clockwork`. */
         val code: String,
     ) : SendTextEvent,
         SendFileEvent
 
+    /** Bytes sent so far, of a [SendFileEvent] transfer. */
     public data class Progress(
+        /** Bytes sent so far. */
         val sentBytes: Long,
+        /** Total bytes to send. */
         val totalBytes: Long,
     ) : SendFileEvent
 
@@ -89,6 +95,7 @@ public sealed interface SendFileEvent : SendEvent
 public sealed interface ReceiveEvent {
     /** A text message arrived. This is the last event. */
     public data class TextReceived(
+        /** The message the sender sent. */
         val text: String,
     ) : ReceiveEvent
 
@@ -100,8 +107,11 @@ public sealed interface ReceiveEvent {
      * you. With [accept], unpack it with [unzip], using [unpackedSize] and [fileCount] as limits.
      */
     public class FileOffered internal constructor(
+        /** The offered file name, or `<dirname>.zip` for a directory. */
         public val name: String,
+        /** Size in bytes of the file, or of the zip for a directory. */
         public val size: Long,
+        /** Whether this offer is a directory sent as a zip. */
         public val isDirectory: Boolean,
         private val decision: CompletableDeferred<Destination?>,
         /** Number of files in the directory, if the sender said. Null for a single file. */
@@ -137,12 +147,16 @@ public sealed interface ReceiveEvent {
             decision.complete(null)
         }
 
+        /** A short summary of the offer's fields, for logging. */
         override fun toString(): String =
             "FileOffered(name=$name, size=$size, isDirectory=$isDirectory, fileCount=$fileCount, unpackedSize=$unpackedSize)"
     }
 
+    /** Bytes received so far, of a [ReceiveEvent.FileOffered] transfer. */
     public data class Progress(
+        /** Bytes received so far. */
         val receivedBytes: Long,
+        /** Total bytes to receive. */
         val totalBytes: Long,
     ) : ReceiveEvent
 
@@ -155,6 +169,7 @@ public sealed interface ReceiveEvent {
      * [FileOffered.accept].
      */
     public data class FileReceived(
+        /** Where [FileOffered.acceptInto] saved the file or directory, or null after [FileOffered.accept]. */
         val saved: SavedFile?,
     ) : ReceiveEvent
 }
@@ -167,8 +182,11 @@ public sealed interface ReceiveEvent {
  * inside the directory, with `/` between folders, for example `photos/2024/beach.jpg`.
  */
 public class OutgoingFile(
+    /** File name, or path inside the directory for [Wormhole.sendDirectory]. */
     public val name: String,
+    /** Size in bytes of the data [open] returns. */
     public val size: Long,
+    /** Returns a new source with the file's [size] bytes. */
     public val open: () -> RawSource,
 ) {
     init {
@@ -186,6 +204,7 @@ public class OutgoingFile(
         { SystemFileSystem.source(path) },
     )
 
+    /** A short summary of the file's fields, for logging. */
     override fun toString(): String = "OutgoingFile(name=$name, size=$size)"
 
     internal fun checksummed(): ZipFileEntry {

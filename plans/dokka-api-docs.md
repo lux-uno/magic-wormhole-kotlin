@@ -1,6 +1,7 @@
 # Plan: API documentation with Dokka on GitHub Pages
 
-Status: not started.
+Status: done. GitHub Pages is on (Settings → Pages → Source: GitHub Actions); the "github-pages"
+environment still needs the `v*` tag rule from step 5 before the first release tag is pushed.
 
 ## Goal
 

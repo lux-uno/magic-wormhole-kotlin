@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.kotlinSerialization)
     alias(libs.plugins.mavenPublish)
     alias(libs.plugins.ktlint)
+    alias(libs.plugins.dokka)
 }
 
 ktlint {
@@ -56,6 +57,24 @@ kotlin {
             implementation(libs.ktor.client.darwin)
         }
     }
+}
+
+dokka {
+    moduleName = "magic-wormhole-kotlin"
+    moduleVersion = project.version.toString()
+    dokkaPublications.html {
+        includes.from("Module.md")
+    }
+    dokkaSourceSets.configureEach {
+        reportUndocumented = true
+        sourceLink {
+            localDirectory = rootDir
+            // Source links point at the release tag, so they match the documented version.
+            remoteUrl("https://github.com/lux-uno/magic-wormhole-kotlin/tree/v${project.version}")
+            remoteLineSuffix = "#L"
+        }
+    }
+    dokkaSourceSets.matching { it.name.startsWith("ios") }.configureEach { suppress = true }
 }
 
 tasks.withType<JavaCompile>().configureEach {

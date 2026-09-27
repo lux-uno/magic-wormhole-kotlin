@@ -21,6 +21,7 @@ public interface FileSaver {
     /** Creates a folder for a received directory. */
     public suspend fun createFolder(name: String): IncomingFolder
 
+    /** Factory functions for built-in [FileSaver] implementations. */
     public companion object {
         /**
          * Saves into [directory], which is created if needed. Data goes to a hidden `.part` file
@@ -36,10 +37,13 @@ public interface FileSaver {
  * [commit] when all bytes arrived and were verified, or [discard] when the transfer failed.
  */
 public interface IncomingFile {
+    /** Where the library writes the received bytes. */
     public val sink: RawSink
 
+    /** Gives the file its final name and location. */
     public suspend fun commit(): SavedFile
 
+    /** Removes the partially written file. */
     public suspend fun discard()
 }
 
@@ -49,14 +53,18 @@ public interface IncomingFile {
  * or [discard] when unpacking failed.
  */
 public interface IncomingFolder : UnzipTarget {
+    /** Gives the folder its final name and location. */
     public suspend fun commit(): SavedFile
 
+    /** Removes the partially unpacked folder. */
     public suspend fun discard()
 }
 
 /** Where a received file or folder was saved. [location] is a path or URI to show or open. */
 public data class SavedFile(
+    /** The final name, after conflicts with existing files were resolved. */
     val name: String,
+    /** A path or URI to show or open. */
     val location: String,
 )
 

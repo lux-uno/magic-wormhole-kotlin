@@ -21,7 +21,8 @@ protocol. Send text and files between devices using a short code like `7-guitari
 
 ## Usage
 
-**Read the full documentation at [docs/usage.md](docs/usage.md).**
+**Read the full documentation at [docs/usage.md](docs/usage.md), or the
+[API reference](https://lux-uno.github.io/magic-wormhole-kotlin/).**
 
 ```kotlin
 val wormhole = Wormhole()
