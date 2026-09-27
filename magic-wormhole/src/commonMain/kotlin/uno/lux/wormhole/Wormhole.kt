@@ -243,33 +243,14 @@ public class Wormhole internal constructor(
      */
     public fun sendFile(file: OutgoingFile): Flow<SendEvent> =
         flow {
-            val name = file.name
-            val size = file.size
-            val source = file.open()
-            try {
+            file.open().use { source ->
                 coroutineScope {
                     withSenderMailbox(this) { handle, session ->
-                        val network = transitNetwork()
-                        try {
-                            FileTransfer.send(
-                                session,
-                                network,
-                                relay,
-                                FileTransfer.fileOffer(name, size),
-                                size,
-                                source,
-                            ) { sent ->
-                                emit(SendEvent.Progress(sent, size))
-                            }
-                            handle.markHappy()
-                        } finally {
-                            network.close()
-                        }
+                        val offer = FileTransfer.fileOffer(file.name, file.size)
+                        sendOverTransit(session, handle, offer, file.size, source)
                     }
                     emit(SendEvent.Completed)
                 }
-            } finally {
-                source.close()
             }
         }
 
@@ -293,12 +274,7 @@ public class Wormhole internal constructor(
         name: String,
         files: List<OutgoingFile>,
     ): Flow<SendEvent> {
-        require(name.isNotEmpty() && '/' !in name && '\\' !in name && name != "." && name != "..") {
-            "Invalid directory name: \"$name\""
-        }
-        files.forEach { OutgoingFile.checkPath(it.name) }
-        val duplicate = files.groupBy { it.name }.values.firstOrNull { it.size > 1 }
-        require(duplicate == null) { "Duplicate path: ${duplicate?.first()?.name}" }
+        checkDirectory(name, files)
         return flow {
             coroutineScope {
                 // Checksum the files while the receiver types the code.
@@ -307,20 +283,41 @@ public class Wormhole internal constructor(
                     val writer = zip.await()
                     val offer =
                         FileTransfer.directoryOffer(name, writer.size, files.sumOf { it.size }, files.size)
-                    val source = writer.source()
-                    val network = transitNetwork()
-                    try {
-                        FileTransfer.send(session, network, relay, offer, writer.size, source) { sent ->
-                            emit(SendEvent.Progress(sent, writer.size))
-                        }
-                        handle.markHappy()
-                    } finally {
-                        network.close()
-                        source.close()
-                    }
+                    writer.source().use { source -> sendOverTransit(session, handle, offer, writer.size, source) }
                 }
                 emit(SendEvent.Completed)
             }
+        }
+    }
+
+    private fun checkDirectory(
+        name: String,
+        files: List<OutgoingFile>,
+    ) {
+        require(name.isNotEmpty() && '/' !in name && '\\' !in name && name != "." && name != "..") {
+            "Invalid directory name: \"$name\""
+        }
+        files.forEach { OutgoingFile.checkPath(it.name) }
+        val duplicate = files.groupBy { it.name }.values.firstOrNull { it.size > 1 }
+        require(duplicate == null) { "Duplicate path: ${duplicate?.first()?.name}" }
+    }
+
+    /** Offers [offer], then sends the [size] bytes of [source] over a transit connection. */
+    private suspend fun FlowCollector<SendEvent>.sendOverTransit(
+        session: WormholeSession,
+        handle: Handle,
+        offer: JsonObject,
+        size: Long,
+        source: RawSource,
+    ) {
+        val network = transitNetwork()
+        try {
+            FileTransfer.send(session, network, relay, offer, size, source) { sent ->
+                emit(SendEvent.Progress(sent, size))
+            }
+            handle.markHappy()
+        } finally {
+            network.close()
         }
     }
 
@@ -349,12 +346,50 @@ public class Wormhole internal constructor(
         onOpened: (Destination) -> Unit,
     ) = withMailbox(scope, nameplate = nameplate, code = code) { handle, session ->
         val (offer, senderTransit) = receiveOffer(session)
-        offer.stringValue("message")?.let { text ->
-            session.send(buildJsonObject { put("answer", buildJsonObject { put("message_ack", "ok") }) })
-            handle.markHappy()
-            emit(ReceiveEvent.TextReceived(text))
-            return@withMailbox
+        val text = offer.stringValue("message")
+        if (text != null) {
+            acceptText(session, handle, text)
+        } else {
+            receiveFile(session, handle, offer, senderTransit, onOpened)
         }
+    }
+
+    private suspend fun FlowCollector<ReceiveEvent>.acceptText(
+        session: WormholeSession,
+        handle: Handle,
+        text: String,
+    ) {
+        session.send(buildJsonObject { put("answer", buildJsonObject { put("message_ack", "ok") }) })
+        handle.markHappy()
+        emit(ReceiveEvent.TextReceived(text))
+    }
+
+    private suspend fun FlowCollector<ReceiveEvent>.receiveFile(
+        session: WormholeSession,
+        handle: Handle,
+        offer: JsonObject,
+        senderTransit: TransitHints?,
+        onOpened: (Destination) -> Unit,
+    ) {
+        val decision = CompletableDeferred<Destination?>()
+        val offered = fileOffered(offer, decision) ?: rejectUnsupported(session, offer)
+        emit(offered)
+        val destination = decision.await()
+        if (destination == null) {
+            session.sendError("transfer rejected")
+            handle.markHappy()
+            return
+        }
+        openDestination(session, destination)
+        onOpened(destination)
+        receiveOverTransit(session, handle, senderTransit, offered.size, destination)
+    }
+
+    /** The file or directory in [offer], or null when the offer has neither. */
+    private fun fileOffered(
+        offer: JsonObject,
+        decision: CompletableDeferred<Destination?>,
+    ): ReceiveEvent.FileOffered? {
         val file = offer["file"] as? JsonObject
         val directory = offer["directory"] as? JsonObject
         val (name, size) =
@@ -369,42 +404,51 @@ public class Wormhole internal constructor(
                 }
 
                 else -> {
-                    null to null
+                    return null
                 }
             }
-        if (name == null || size == null || size < 0) {
-            session.send(buildJsonObject { put("error", "unsupported offer") })
-            throw WormholeProtocolException("Unsupported offer: $offer")
-        }
-
-        val decision = CompletableDeferred<Destination?>()
-        emit(
-            ReceiveEvent.FileOffered(
-                name,
-                size,
-                isDirectory = directory != null,
-                decision,
-                fileCount = directory?.longValue("numfiles")?.toInt(),
-                unpackedSize = directory?.longValue("numbytes"),
-                unpacker = config.folderUnpacker,
-            ),
+        if (name == null || size == null || size < 0) return null
+        return ReceiveEvent.FileOffered(
+            name,
+            size,
+            isDirectory = directory != null,
+            decision,
+            fileCount = directory?.longValue("numfiles")?.toInt(),
+            unpackedSize = directory?.longValue("numbytes"),
+            unpacker = config.folderUnpacker,
         )
-        val destination = decision.await()
-        if (destination == null) {
-            session.send(buildJsonObject { put("error", "transfer rejected") })
-            handle.markHappy()
-            return@withMailbox
-        }
+    }
+
+    private suspend fun rejectUnsupported(
+        session: WormholeSession,
+        offer: JsonObject,
+    ): Nothing {
+        session.sendError("unsupported offer")
+        throw WormholeProtocolException("Unsupported offer: $offer")
+    }
+
+    private suspend fun openDestination(
+        session: WormholeSession,
+        destination: Destination,
+    ) {
         try {
             destination.open()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             // For example, the disk is full. The CLI answers the same way.
-            session.send(buildJsonObject { put("error", "transfer rejected") })
+            session.sendError("transfer rejected")
             throw e
         }
-        onOpened(destination)
+    }
+
+    private suspend fun FlowCollector<ReceiveEvent>.receiveOverTransit(
+        session: WormholeSession,
+        handle: Handle,
+        senderTransit: TransitHints?,
+        size: Long,
+        destination: Destination,
+    ) {
         val network = transitNetwork()
         try {
             FileTransfer.receive(session, network, relay, senderTransit, size, destination::write) { received ->
@@ -504,6 +548,8 @@ public class Wormhole internal constructor(
         if (mailbox != null) client.close(mailbox, mood) else client.shutdown()
     }
 }
+
+private suspend fun WormholeSession.sendError(text: String) = send(buildJsonObject { put("error", text) })
 
 internal fun JsonObject.stringValue(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
 

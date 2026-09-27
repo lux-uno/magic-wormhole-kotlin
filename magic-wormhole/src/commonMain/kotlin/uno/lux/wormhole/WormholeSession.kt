@@ -35,29 +35,37 @@ internal class WormholeSession(
         val spake = Spake2Symmetric(code.encodeToByteArray(), appId.encodeToByteArray())
         val pakeBody = buildJsonObject { put("pake_v1", spake.start().toHexString()) }
         client.add("pake", pakeBody.toString().encodeToByteArray())
+        key = finishPake(spake, receivePeerPake())
+        exchangeVersions()
+    }
 
-        val peerPake =
-            try {
-                val payload = parseJson(receivePhase("pake"))
-                (payload["pake_v1"] as JsonPrimitive).content.hexToByteArray()
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                throw WormholeProtocolException("Malformed PAKE message from the other side", e)
-            }
-        val sharedKey =
-            try {
-                spake.finish(peerPake)
-            } catch (e: IllegalArgumentException) {
-                throw WormholeProtocolException("Invalid PAKE message from the other side", e)
-            }
-        key = sharedKey
+    private suspend fun receivePeerPake(): ByteArray =
+        try {
+            val payload = parseJson(receivePhase("pake"))
+            (payload["pake_v1"] as JsonPrimitive).content.hexToByteArray()
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            throw WormholeProtocolException("Malformed PAKE message from the other side", e)
+        }
 
+    private fun finishPake(
+        spake: Spake2Symmetric,
+        peerPake: ByteArray,
+    ): ByteArray =
+        try {
+            spake.finish(peerPake)
+        } catch (e: IllegalArgumentException) {
+            throw WormholeProtocolException("Invalid PAKE message from the other side", e)
+        }
+
+    /** Both sides send an encrypted "version" message. If the peer's does not decrypt, the codes differ. */
+    private suspend fun exchangeVersions() {
         val versions = buildJsonObject { put("app_versions", buildJsonObject { }) }
         client.add("version", encrypt(client.side, "version", versions.toString().encodeToByteArray()))
 
-        val peerVersion = receiveMessage("version")
+        val (peerSide, peerVersion) = receiveMessage("version")
         try {
-            decrypt(peerVersion.first, "version", peerVersion.second)
+            decrypt(peerSide, "version", peerVersion)
         } catch (e: DecryptionException) {
             throw WrongCodeException()
         }

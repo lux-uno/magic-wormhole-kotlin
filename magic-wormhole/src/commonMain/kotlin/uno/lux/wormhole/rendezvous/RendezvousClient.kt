@@ -48,34 +48,43 @@ internal class RendezvousClient private constructor(
     private val reader: Job = scope.launch { readLoop() }
 
     private suspend fun readLoop() {
-        var failure: WormholeException? = null
-        try {
-            for (text in connection.incoming) {
-                when (val m = ServerMessage.parse(text)) {
-                    is ServerMessage.Welcome -> {
-                        welcome.complete(m)
-                    }
+        val failure =
+            try {
+                dispatchIncoming()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                ServerConnectionException("Connection to the wormhole server failed", e)
+            }
+        closeChannels(failure)
+    }
 
-                    is ServerMessage.Message -> {
-                        if (m.side != side) messages.send(m)
-                    }
+    /** Passes server messages on until the connection ends. Returns the server's error, if it sent one. */
+    private suspend fun dispatchIncoming(): WormholeException? {
+        for (text in connection.incoming) {
+            when (val m = ServerMessage.parse(text)) {
+                is ServerMessage.Welcome -> {
+                    welcome.complete(m)
+                }
 
-                    is ServerMessage.Error -> {
-                        failure = WormholeServerException(m.error)
-                        break
-                    }
+                is ServerMessage.Message -> {
+                    if (m.side != side) messages.send(m)
+                }
 
-                    ServerMessage.Ack, is ServerMessage.Pong, is ServerMessage.Unknown -> {}
+                is ServerMessage.Error -> {
+                    return WormholeServerException(m.error)
+                }
 
-                    else -> {
-                        replies.send(m)
-                    }
+                ServerMessage.Ack, is ServerMessage.Pong, is ServerMessage.Unknown -> {}
+
+                else -> {
+                    replies.send(m)
                 }
             }
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            failure = ServerConnectionException("Connection to the wormhole server failed", e)
         }
+        return null
+    }
+
+    private fun closeChannels(failure: WormholeException?) {
         val error =
             failure
                 ?: if (shuttingDown) null else ServerConnectionException("Connection to the wormhole server was lost")
