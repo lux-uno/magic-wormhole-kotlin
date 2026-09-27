@@ -68,87 +68,118 @@ private class ZipReader(
     private val maxFiles: Int,
     private val checkCancelled: () -> Unit,
 ) {
-    private var totalBytes = 0L
+    private val unpackedBytes = UnpackedBytes(maxBytes)
+
+    /** Where the central directory is, and how many entries it holds. */
+    private class Directory(
+        val count: Long,
+        val size: Long,
+        val offset: Long,
+    )
 
     fun readAll() {
         val entries = readCentralDirectory().sortedBy { it.offset }
-        val fileCount = entries.count { !it.isDirectory() }
-        if (fileCount > maxFiles) throw InvalidZipException("The zip holds more files than announced")
-        if (entries.sumOf { if (it.isDirectory()) 0 else it.size } > maxBytes) {
-            throw InvalidZipException("The zip holds more data than announced")
-        }
-        open(0).buffered().use { input ->
-            var position = 0L
-            for (entry in entries) {
-                checkCancelled()
-                if (entry.offset < position) throw InvalidZipException("Overlapping entries in zip")
-                input.skip(entry.offset - position)
-                position = entry.offset
-                if (input.readIntLe() !=
-                    ZipWriter.LOCAL_HEADER
-                ) {
-                    throw InvalidZipException("Damaged zip: missing local header")
-                }
-                input.skip(22)
-                val nameLength = input.readShortLe().toInt() and 0xFFFF
-                val extraLength = input.readShortLe().toInt() and 0xFFFF
-                input.skip((nameLength + extraLength).toLong())
-                position += 30L + nameLength + extraLength
-                extract(entry, input)
-                position += entry.compressedSize
-            }
+        checkAnnouncedLimits(entries)
+        open(0).buffered().use { input -> extractAll(entries, input) }
+    }
+
+    private fun checkAnnouncedLimits(entries: List<CentralEntry>) {
+        val files = entries.filterNot { it.isDirectory() }
+        if (files.size > maxFiles) throw InvalidZipException("The zip holds more files than announced")
+        if (files.sumOf { it.size } > maxBytes) throw InvalidZipException("The zip holds more data than announced")
+    }
+
+    private fun extractAll(
+        entries: List<CentralEntry>,
+        input: Source,
+    ) {
+        var position = 0L
+        for (entry in entries) {
+            checkCancelled()
+            if (entry.offset < position) throw InvalidZipException("Overlapping entries in zip")
+            input.skip(entry.offset - position)
+            position = entry.offset + skipLocalHeader(input)
+            extract(entry, input)
+            position += entry.compressedSize
         }
     }
 
+    /** Skips the local header at the start of [input], and returns its length. */
+    private fun skipLocalHeader(input: Source): Long {
+        if (input.readIntLe() != ZipWriter.LOCAL_HEADER) throw InvalidZipException("Damaged zip: missing local header")
+        input.skip(22)
+        val nameLength = input.readShortLe().toInt() and 0xFFFF
+        val extraLength = input.readShortLe().toInt() and 0xFFFF
+        input.skip((nameLength + extraLength).toLong())
+        return 30L + nameLength + extraLength
+    }
+
     private fun readCentralDirectory(): List<CentralEntry> {
+        val directory = findCentralDirectory()
+        if (directory.offset + directory.size > size || directory.count < 0 ||
+            directory.count > directory.size / 46
+        ) {
+            throw InvalidZipException("Damaged zip: bad central directory")
+        }
+        return open(directory.offset).buffered().use { input ->
+            List(directory.count.toInt()) { readCentralHeader(input, directory.offset) }
+        }
+    }
+
+    /** Reads the end record from the last bytes of the zip, and the Zip64 end record if there is one. */
+    private fun findCentralDirectory(): Directory {
         if (size < END_SIZE) throw InvalidZipException("Not a zip file")
         val tailStart = maxOf(0L, size - MAX_TAIL)
         val tail = open(tailStart).buffered().use { it.readByteArray((size - tailStart).toInt()) }
-        var end = tail.size - END_SIZE
-        while (end >= 0 &&
-            !(tail.intAt(end) == ZipWriter.END && end + END_SIZE + tail.shortAt(end + 20) == tail.size)
-        ) {
-            end--
-        }
-        if (end < 0) throw InvalidZipException("Not a zip file, or a damaged one")
-
-        var count = tail.shortAt(end + 10).toLong()
-        var directorySize = tail.intAt(end + 12).toLong() and 0xFFFFFFFFL
-        var directoryOffset = tail.intAt(end + 16).toLong() and 0xFFFFFFFFL
+        val end = findEndRecord(tail)
         val locator = end - 20
         if (locator >= 0 && tail.intAt(locator) == ZipWriter.END64_LOCATOR) {
-            val end64Offset = Buffer().apply { write(tail, locator + 8, locator + 16) }.readLongLe()
-            val record =
-                if (end64Offset >= tailStart) {
-                    Buffer().apply { write(tail, (end64Offset - tailStart).toInt(), tail.size) }
-                } else {
-                    Buffer().apply { open(end64Offset).buffered().use { write(it.readByteArray(56)) } }
-                }
-            if (record.readIntLe() != ZipWriter.END64) throw InvalidZipException("Damaged Zip64 end record")
-            record.skip(20)
-            record.readLongLe()
-            count = record.readLongLe()
-            directorySize = record.readLongLe()
-            directoryOffset = record.readLongLe()
+            return readZip64EndRecord(tail, tailStart, locator)
         }
-        if (directoryOffset + directorySize > size || count < 0 || count > directorySize / 46) {
-            throw InvalidZipException("Damaged zip: bad central directory")
-        }
+        return Directory(
+            count = tail.shortAt(end + 10).toLong(),
+            size = tail.intAt(end + 12).toLong() and 0xFFFFFFFFL,
+            offset = tail.intAt(end + 16).toLong() and 0xFFFFFFFFL,
+        )
+    }
 
-        return open(directoryOffset).buffered().use { input ->
-            List(count.toInt()) {
-                if (input.readIntLe() !=
-                    ZipWriter.CENTRAL_HEADER
-                ) {
-                    throw InvalidZipException("Damaged central directory")
-                }
-                readCentralEntry(input).also {
-                    if (it.offset + it.compressedSize > directoryOffset) {
-                        throw InvalidZipException("Damaged zip: bad entry ${it.name}")
-                    }
-                }
+    /** The position of the end record in [tail]: the last one whose comment ends the zip. */
+    private fun findEndRecord(tail: ByteArray): Int =
+        (tail.size - END_SIZE downTo 0).firstOrNull { i ->
+            tail.intAt(i) == ZipWriter.END && i + END_SIZE + tail.shortAt(i + 20) == tail.size
+        } ?: throw InvalidZipException("Not a zip file, or a damaged one")
+
+    private fun readZip64EndRecord(
+        tail: ByteArray,
+        tailStart: Long,
+        locator: Int,
+    ): Directory {
+        val end64Offset = Buffer().apply { write(tail, locator + 8, locator + 16) }.readLongLe()
+        val record =
+            if (end64Offset >= tailStart) {
+                Buffer().apply { write(tail, (end64Offset - tailStart).toInt(), tail.size) }
+            } else {
+                Buffer().apply { open(end64Offset).buffered().use { write(it.readByteArray(56)) } }
             }
+        if (record.readIntLe() != ZipWriter.END64) throw InvalidZipException("Damaged Zip64 end record")
+        record.skip(28)
+        val count = record.readLongLe()
+        val directorySize = record.readLongLe()
+        val directoryOffset = record.readLongLe()
+        return Directory(count, directorySize, directoryOffset)
+    }
+
+    /** Reads one central directory header, and checks that its data ends before [directoryOffset]. */
+    private fun readCentralHeader(
+        input: Source,
+        directoryOffset: Long,
+    ): CentralEntry {
+        if (input.readIntLe() != ZipWriter.CENTRAL_HEADER) throw InvalidZipException("Damaged central directory")
+        val entry = readCentralEntry(input)
+        if (entry.offset + entry.compressedSize > directoryOffset) {
+            throw InvalidZipException("Damaged zip: bad entry ${entry.name}")
         }
+        return entry
     }
 
     private fun extract(
@@ -156,44 +187,12 @@ private class ZipReader(
         input: Source,
     ) {
         if (entry.flags and FLAG_ENCRYPTED != 0) throw InvalidZipException("Encrypted zip files are not supported")
-        val path = safePath(entry.name)
-        val sink: RawSink? =
-            when {
-                path == null -> null
-                entry.isDirectory() -> null.also { target.createDirectory(path) }
-                else -> target.createFile(path)
-            }
-        val checksum = Crc32()
-        var written = 0L
+        val sink = target.openEntry(safePath(entry.name), entry.isDirectory())
+        val output = EntryWriter(sink, entry.size, unpackedBytes, checkCancelled)
         val data = LimitedSource(input, entry.compressedSize).buffered()
-        try {
-            val buffer = Buffer()
-            val write = { bytes: ByteArray, start: Int, end: Int ->
-                checkCancelled()
-                written += end - start
-                totalBytes += end - start
-                if (written > entry.size || totalBytes > maxBytes) {
-                    throw InvalidZipException("The zip holds more data than announced")
-                }
-                checksum.update(bytes, start, end)
-                if (sink != null) {
-                    buffer.write(bytes, start, end)
-                    sink.write(buffer, buffer.size)
-                }
-            }
-            when (entry.method) {
-                ZipWriter.METHOD_STORED -> copy(data, write)
-                ZipWriter.METHOD_DEFLATED -> Inflater(data).inflate(write)
-                else -> throw InvalidZipException("Unsupported compression method ${entry.method}")
-            }
-            sink?.flush()
-        } finally {
-            sink?.close()
-        }
+        output.use { decompress(entry.method, data, it) }
         data.transferTo(discardingSink())
-        if (written != entry.size ||
-            checksum.value != entry.crc
-        ) {
+        if (output.written != entry.size || output.crc != entry.crc) {
             throw InvalidZipException("Damaged file in zip: ${entry.name}")
         }
     }
@@ -212,6 +211,96 @@ private class ZipReader(
         const val MAX_TAIL = END_SIZE + 0xFFFF + 20L
     }
 }
+
+/** Counts the bytes unpacked from all entries, and fails when they pass [maxBytes]. */
+internal class UnpackedBytes(
+    private val maxBytes: Long,
+) {
+    private var total = 0L
+
+    fun add(count: Int) {
+        total += count
+        if (total > maxBytes) throw InvalidZipException("The zip holds more data than announced")
+    }
+}
+
+/**
+ * Takes the unpacked bytes of one entry: checks them against [maxSize] and the [total] limit,
+ * computes their checksum, and writes them to [sink]. A null [sink] drops the bytes.
+ */
+internal class EntryWriter(
+    private val sink: RawSink?,
+    private val maxSize: Long,
+    private val total: UnpackedBytes,
+    private val checkCancelled: () -> Unit,
+) {
+    private val checksum = Crc32()
+    private val buffer = Buffer()
+
+    var written = 0L
+        private set
+
+    val crc: Int get() = checksum.value
+
+    fun write(
+        bytes: ByteArray,
+        start: Int,
+        end: Int,
+    ) {
+        checkCancelled()
+        written += end - start
+        total.add(end - start)
+        if (written > maxSize) throw InvalidZipException("The zip holds more data than announced")
+        checksum.update(bytes, start, end)
+        if (sink != null) {
+            buffer.write(bytes, start, end)
+            sink.write(buffer, buffer.size)
+        }
+    }
+
+    /** Runs [block], then flushes the sink. Closes the sink in every case. */
+    fun <T> use(block: (EntryWriter) -> T): T =
+        try {
+            block(this).also { sink?.flush() }
+        } finally {
+            sink?.close()
+        }
+}
+
+/** Creates the folder or opens the file for an entry. Returns null when there is no file to write. */
+internal fun UnzipTarget.openEntry(
+    path: String?,
+    isDirectory: Boolean,
+): RawSink? =
+    when {
+        path == null -> {
+            null
+        }
+
+        isDirectory -> {
+            createDirectory(path)
+            null
+        }
+
+        else -> {
+            createFile(path)
+        }
+    }
+
+/** Unpacks the entry [data] stored with [method] into [output]. */
+internal fun decompress(
+    method: Short,
+    data: Source,
+    output: EntryWriter,
+) {
+    when (method) {
+        ZipWriter.METHOD_STORED -> copy(data, output::write)
+        ZipWriter.METHOD_DEFLATED -> Inflater(data).inflate(output::write)
+        else -> throw InvalidZipException("Unsupported compression method $method")
+    }
+}
+
+internal fun isDirectoryName(name: String) = name.endsWith('/') || name.endsWith('\\')
 
 /**
  * Turns a zip entry name into a safe relative path: `\` becomes `/`, and `.` and empty parts are
@@ -269,7 +358,7 @@ internal class CentralEntry(
     val size: Long,
     val offset: Long,
 ) {
-    fun isDirectory() = name.endsWith('/') || name.endsWith('\\')
+    fun isDirectory() = isDirectoryName(name)
 }
 
 /** Reads one central directory header, after its signature. Resolves Zip64 sizes and offsets. */
@@ -287,25 +376,30 @@ internal fun readCentralEntry(input: Source): CentralEntry {
     input.skip(8)
     var offset = input.readIntLe().toLong() and 0xFFFFFFFFL
     val name = input.readByteArray(nameLength).decodeToString()
-    val extra = Buffer().apply { write(input.readByteArray(extraLength)) }
+    val extra = input.readByteArray(extraLength)
     input.skip(commentLength.toLong())
-    while (extra.size >= 4) {
-        val id = extra.readShortLe()
-        val length = (extra.readShortLe().toInt() and 0xFFFF).toLong()
-        if (extra.size < length) break
-        if (id != ZipWriter.ZIP64_EXTRA) {
-            extra.skip(length)
-            continue
-        }
-        val field = Buffer().apply { write(extra, length) }
+    forEachZip64Field(extra) { field ->
         if (uncompressedSize == ZipWriter.MAX_32 && field.size >= 8) uncompressedSize = field.readLongLe()
         if (compressedSize == ZipWriter.MAX_32 && field.size >= 8) compressedSize = field.readLongLe()
         if (offset == ZipWriter.MAX_32 && field.size >= 8) offset = field.readLongLe()
     }
-    if (compressedSize < 0 || uncompressedSize < 0 ||
-        offset < 0
-    ) {
+    if (compressedSize < 0 || uncompressedSize < 0 || offset < 0) {
         throw InvalidZipException("Damaged zip: bad entry $name")
     }
     return CentralEntry(name, flags, method, crc, compressedSize, uncompressedSize, offset)
+}
+
+/** Calls [action] with the data of each Zip64 field in the [extra] fields of a header. */
+internal inline fun forEachZip64Field(
+    extra: ByteArray,
+    action: (Buffer) -> Unit,
+) {
+    val fields = Buffer().apply { write(extra) }
+    while (fields.size >= 4) {
+        val id = fields.readShortLe()
+        val length = (fields.readShortLe().toInt() and 0xFFFF).toLong()
+        if (fields.size < length) break
+        val field = Buffer().apply { write(fields, length) }
+        if (id == ZipWriter.ZIP64_EXTRA) action(field)
+    }
 }
