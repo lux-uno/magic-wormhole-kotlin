@@ -1,6 +1,8 @@
 # magic-wormhole-kotlin
 
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.lux-uno/magic-wormhole)](https://central.sonatype.com/artifact/io.github.lux-uno/magic-wormhole)
+[![CI](https://github.com/lux-uno/magic-wormhole-kotlin/actions/workflows/ci.yml/badge.svg)](https://github.com/lux-uno/magic-wormhole-kotlin/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A Kotlin Multiplatform implementation of the [Magic Wormhole](https://magic-wormhole.readthedocs.io/)
 protocol. Send text and files between devices using a short code like `7-guitarist-revenge`.
