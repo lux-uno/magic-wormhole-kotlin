@@ -4,6 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.io.RawSink
+import kotlinx.io.RawSource
 import kotlinx.io.buffered
 import kotlinx.io.files.FileNotFoundException
 import kotlinx.io.files.Path
@@ -32,14 +33,14 @@ private suspend fun unzipFile(
     maxFiles: Int,
 ) {
     val size = SystemFileSystem.metadataOrNull(zip)?.size ?: throw FileNotFoundException("$zip")
-    unzip(
-        size,
-        { offset -> SystemFileSystem.source(zip).buffered().apply { skip(offset) } },
-        target,
-        maxBytes,
-        maxFiles,
-    )
+    unzip(size, { offset -> openFileAt(zip, offset) }, target, maxBytes, maxFiles)
 }
+
+/** Opens [path] for reading from byte [offset] on, seeking where the platform can. */
+internal expect fun openFileAt(
+    path: Path,
+    offset: Long,
+): RawSource
 
 private class FolderUnzipTarget(
     private val folder: Path,
