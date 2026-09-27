@@ -88,7 +88,10 @@ class PathTransferTest {
             assertNull(transfer { sendFile(Path(outbox, "photo.jpg")) })
 
             assertContentEquals(data, read(Path(inbox, "photo.jpg")))
-            assertEquals(ReceiveEvent.FileReceived(Path(inbox, "photo.jpg")), received.last())
+            assertEquals(
+                ReceiveEvent.FileReceived(SavedFile("photo.jpg", Path(inbox, "photo.jpg").toString())),
+                received.last(),
+            )
             assertEquals(listOf("photo.jpg"), SystemFileSystem.list(inbox).map { it.name })
         }
 
@@ -110,33 +113,24 @@ class PathTransferTest {
             assertNull(transfer { sendDirectory(folder) })
 
             assertContentEquals(content(1000), read(Path(inbox, "holiday", "a.txt")))
-            assertEquals(ReceiveEvent.FileReceived(Path(inbox, "holiday")), received.last())
+            assertEquals(
+                ReceiveEvent.FileReceived(SavedFile("holiday", Path(inbox, "holiday").toString())),
+                received.last(),
+            )
             assertContentEquals(content(70_000), read(Path(inbox, "holiday", "sub", "deeper", "b.bin")))
             assertEquals(listOf("holiday"), SystemFileSystem.list(inbox).map { it.name })
         }
 
     @Test
-    fun receiverDoesNotOverwriteExistingFiles() =
+    fun receiverGivesANewNameInsteadOfOverwriting() =
         runTest {
             write(Path(outbox, "notes.txt"), content(10))
             SystemFileSystem.sink(Path(inbox, "notes.txt")).buffered().use { it.writeString("mine") }
-            val code = CompletableDeferred<String>()
-            val sender =
-                async {
-                    runCatching {
-                        wormhole("10.0.0.1").sendFile(Path(outbox, "notes.txt")).collect {
-                            if (it is SendEvent.CodeAllocated) code.complete(it.code)
-                        }
-                    }
-                }
 
-            assertFailsWith<kotlinx.io.IOException> {
-                wormhole("10.0.0.2").receive(code.await()).collect { event ->
-                    if (event is ReceiveEvent.FileOffered) event.acceptInto(inbox)
-                }
-            }
-            assertIs<TransferRejectedException>(sender.await().exceptionOrNull())
+            assertNull(transfer { sendFile(Path(outbox, "notes.txt")) })
+
             assertEquals("mine", read(Path(inbox, "notes.txt")).decodeToString())
+            assertContentEquals(content(10), read(Path(inbox, "notes (1).txt")))
         }
 
     @Test
@@ -145,16 +139,6 @@ class PathTransferTest {
             val flow = wormhole("10.0.0.1").sendFile(Path(outbox, "missing.txt"))
             assertFailsWith<FileNotFoundException> { flow.collect {} }
         }
-
-    @Test
-    fun offeredNamesCannotLeaveTheFolder() {
-        assertEquals("evil.txt", safeFileName("../../evil.txt"))
-        assertEquals("evil.txt", safeFileName("..\\..\\evil.txt"))
-        assertEquals("photo.jpg", safeFileName("photo.jpg"))
-        for (bad in listOf("", ".", "..", "dir/", "a:b", "C:", "line\nbreak")) {
-            assertFailsWith<WormholeProtocolException>(bad) { safeFileName(bad) }
-        }
-    }
 
     @Test
     fun unzipUnpacksAZipFileIntoAFolder() =

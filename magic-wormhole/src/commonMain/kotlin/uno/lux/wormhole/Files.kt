@@ -1,10 +1,15 @@
 package uno.lux.wormhole
 
-import kotlinx.io.IOException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.io.RawSink
 import kotlinx.io.buffered
+import kotlinx.io.files.FileNotFoundException
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
+import kotlinx.io.files.SystemTemporaryDirectory
+import kotlin.random.Random
 
 /**
  * Unpacks the zip file [zip] into [folder], which is created if needed. See the other [unzip]
@@ -16,12 +21,21 @@ public suspend fun unzip(
     maxBytes: Long = Long.MAX_VALUE,
     maxFiles: Int = Int.MAX_VALUE,
 ) {
-    val size = SystemFileSystem.metadataOrNull(zip)?.size ?: throw kotlinx.io.files.FileNotFoundException("$zip")
     SystemFileSystem.createDirectories(folder)
+    unzipFile(zip, FolderUnzipTarget(folder), maxBytes, maxFiles)
+}
+
+private suspend fun unzipFile(
+    zip: Path,
+    target: UnzipTarget,
+    maxBytes: Long,
+    maxFiles: Int,
+) {
+    val size = SystemFileSystem.metadataOrNull(zip)?.size ?: throw FileNotFoundException("$zip")
     unzip(
         size,
         { offset -> SystemFileSystem.source(zip).buffered().apply { skip(offset) } },
-        FolderUnzipTarget(folder),
+        target,
         maxBytes,
         maxFiles,
     )
@@ -72,69 +86,89 @@ internal fun filesIn(folder: Path): List<DirectoryEntry> {
     return entries
 }
 
-/**
- * The last part of a name offered by the sender, so that the file stays in the receiver's folder.
- * Like the `wormhole` CLI, `../../a.txt` becomes `a.txt`.
- */
-internal fun safeFileName(offered: String): String {
-    val name = offered.substringAfterLast('/').substringAfterLast('\\')
-    if (name.isEmpty() || name == "." || name == ".." || ':' in name || name.any { it < ' ' }) {
-        throw WormholeProtocolException("Unsafe file name: \"$offered\"")
-    }
-    return name
-}
-
 /** Where a received file goes. */
 internal interface Destination {
-    /** Opens the sink for the received bytes. */
-    fun open(): RawSink
+    /** Opens the sink for the received bytes. Storage errors are thrown as [SaveFailedException]. */
+    suspend fun open(): RawSink
 
-    /** Called after all bytes arrived and the sink was closed. Returns where the file was saved, if known. */
-    suspend fun finish(): Path? = null
+    /**
+     * Called after all bytes arrived and the sink was closed. Calls [onUnpacking] before it
+     * unpacks a directory. Returns where the file was saved, if known.
+     */
+    suspend fun finish(onUnpacking: suspend () -> Unit): SavedFile? = null
 
     /** Called when the transfer failed after [open]. */
-    fun discard() = Unit
+    suspend fun discard() = Unit
 }
 
 internal class SinkDestination(
     private val sink: RawSink,
 ) : Destination {
-    override fun open() = sink
+    override suspend fun open() = sink
 }
 
 /**
- * Saves a file as `folder/<name>`, or unpacks a directory into `folder/<dirname>`. The data goes
- * to a `.part` file first, so a failed transfer leaves nothing behind.
+ * Saves through [saver]. When [unpack] is true, a directory goes to a temporary zip first and
+ * [finish] unpacks it into a folder of the saver.
  */
-internal class FolderDestination(
-    private val folder: Path,
+internal class SaverDestination(
+    private val saver: FileSaver,
     private val offer: ReceiveEvent.FileOffered,
+    unpack: Boolean,
 ) : Destination {
-    // Computed in open(), so an unsafe name fails the transfer instead of the caller of accept.
-    private val target by lazy {
-        Path(folder, safeFileName(if (offer.isDirectory) offer.name.removeSuffix(".zip") else offer.name))
-    }
-    private val part by lazy { Path(folder, "${target.name}${if (offer.isDirectory) ".zip" else ""}.part") }
+    private val unpacks = unpack && offer.isDirectory
+    private var file: IncomingFile? = null
+    private var zip: Path? = null
 
-    override fun open(): RawSink {
-        for (path in listOf(target, part)) {
-            if (SystemFileSystem.exists(path)) throw IOException("Refusing to overwrite $path")
+    override suspend fun open(): RawSink =
+        saving("Could not create the file") {
+            if (unpacks) {
+                val path = Path(SystemTemporaryDirectory, "wormhole-${Random.nextLong().toULong().toString(16)}.zip")
+                zip = path
+                SystemFileSystem.sink(path)
+            } else {
+                saver.createFile(safeFileName(offer.name), offer.size).also { file = it }.sink
+            }
         }
-        return SystemFileSystem.sink(part)
-    }
 
-    override suspend fun finish(): Path {
-        if (!offer.isDirectory) {
-            SystemFileSystem.atomicMove(part, target)
-            return target
-        }
+    override suspend fun finish(onUnpacking: suspend () -> Unit): SavedFile {
+        file?.let { return saving("Could not save the file") { it.commit() } }
+        val zip = zip!!
         try {
-            unzip(part, target, offer.unpackedSize ?: Long.MAX_VALUE, offer.fileCount ?: Int.MAX_VALUE)
+            onUnpacking()
+            val name = safeFileName(offer.name.removeSuffix(".zip"))
+            val folder = saving("Could not create the folder") { saver.createFolder(name) }
+            try {
+                saving("Could not save the folder") {
+                    unzipFile(zip, folder, offer.unpackedSize ?: Long.MAX_VALUE, offer.fileCount ?: Int.MAX_VALUE)
+                }
+                return saving("Could not save the folder") { folder.commit() }
+            } catch (e: Throwable) {
+                withContext(NonCancellable) { runCatching { folder.discard() } }
+                throw e
+            }
         } finally {
-            discard()
+            SystemFileSystem.delete(zip, mustExist = false)
         }
-        return target
     }
 
-    override fun discard() = SystemFileSystem.delete(part, mustExist = false)
+    override suspend fun discard() {
+        runCatching { file?.discard() }
+        zip?.let { runCatching { SystemFileSystem.delete(it, mustExist = false) } }
+    }
 }
+
+/** Runs [block] and reports storage errors as [SaveFailedException], with [what] when they have no message. */
+private suspend fun <T> saving(
+    what: String,
+    block: suspend () -> T,
+): T =
+    try {
+        block()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: WormholeException) {
+        throw e
+    } catch (e: Exception) {
+        throw SaveFailedException(e.message ?: what, e)
+    }

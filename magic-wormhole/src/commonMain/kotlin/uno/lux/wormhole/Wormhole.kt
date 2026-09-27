@@ -1,13 +1,16 @@
 package uno.lux.wormhole
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withContext
 import kotlinx.io.Buffer
 import kotlinx.io.RawSink
 import kotlinx.io.RawSource
@@ -98,13 +101,20 @@ public sealed interface ReceiveEvent {
         public val unpackedSize: Long? = null,
     ) : ReceiveEvent {
         /**
-         * Saves the file in [folder], or unpacks the directory into a subfolder of [folder].
-         * Only the last part of the offered name is used, so nothing is written outside [folder].
-         * The transfer fails with an [kotlinx.io.IOException] (and the sender is told it was
-         * rejected) when a file or folder with that name already exists.
+         * Saves the file with [saver]. A directory is unpacked into a folder of [saver]; with
+         * [unpack] false it is saved as the zip file [name] instead. The saver gets only the last
+         * part of the offered name, so a sender cannot choose where files go.
          */
+        public fun acceptInto(
+            saver: FileSaver,
+            unpack: Boolean = true,
+        ) {
+            decision.complete(SaverDestination(saver, this, unpack))
+        }
+
+        /** Saves the file in [folder], or unpacks the directory into it. See [FileSaver.folder]. */
         public fun acceptInto(folder: Path) {
-            decision.complete(FolderDestination(folder, this))
+            acceptInto(FileSaver.folder(folder))
         }
 
         /** Receives the file into [sink]. The library closes [sink] when the transfer ends. */
@@ -126,13 +136,16 @@ public sealed interface ReceiveEvent {
         val totalBytes: Long,
     ) : ReceiveEvent
 
+    /** A directory was received and is now being unpacked. [FileReceived] follows. */
+    public data object Unpacking : ReceiveEvent
+
     /**
-     * The whole file was received and verified. This is the last event. [path] is where
-     * [FileOffered.acceptInto] saved the file or unpacked the directory, or null after
+     * The whole file was received and verified. This is the last event. [saved] tells where
+     * [FileOffered.acceptInto] saved the file or unpacked the directory. It is null after
      * [FileOffered.accept].
      */
     public data class FileReceived(
-        val path: Path?,
+        val saved: SavedFile?,
     ) : ReceiveEvent
 }
 
@@ -310,77 +323,94 @@ public class Wormhole internal constructor(
     public fun receive(code: String): Flow<ReceiveEvent> =
         flow {
             val nameplate = Codes.nameplateOf(code)
-            coroutineScope {
-                withMailbox(this, nameplate = nameplate, code = code) { handle, session ->
-                    val (offer, senderTransit) = receiveOffer(session)
-                    offer.stringValue("message")?.let { text ->
-                        session.send(buildJsonObject { put("answer", buildJsonObject { put("message_ack", "ok") }) })
-                        handle.markHappy()
-                        emit(ReceiveEvent.TextReceived(text))
-                        return@withMailbox
-                    }
-                    val file = offer["file"] as? JsonObject
-                    val directory = offer["directory"] as? JsonObject
-                    val (name, size) =
-                        when {
-                            file != null -> {
-                                file.stringValue("filename") to file.longValue("filesize")
-                            }
+            // Set once the destination is open; it must then be finished or discarded.
+            var opened: Destination? = null
+            val saved =
+                try {
+                    coroutineScope { receiveInMailbox(this, nameplate, code) { opened = it } }
+                    // After the mailbox is closed, so unpacking does not hold the connection open.
+                    opened?.finish { emit(ReceiveEvent.Unpacking) }
+                } catch (e: Throwable) {
+                    opened?.let { withContext(NonCancellable) { it.discard() } }
+                    throw e
+                }
+            if (opened != null) emit(ReceiveEvent.FileReceived(saved))
+        }
 
-                            directory != null -> {
-                                directory.stringValue("dirname")?.let { "$it.zip" } to
-                                    directory.longValue("zipsize")
-                            }
+    private suspend fun FlowCollector<ReceiveEvent>.receiveInMailbox(
+        scope: CoroutineScope,
+        nameplate: String,
+        code: String,
+        onOpened: (Destination) -> Unit,
+    ) = withMailbox(scope, nameplate = nameplate, code = code) { handle, session ->
+        val (offer, senderTransit) = receiveOffer(session)
+        offer.stringValue("message")?.let { text ->
+            session.send(buildJsonObject { put("answer", buildJsonObject { put("message_ack", "ok") }) })
+            handle.markHappy()
+            emit(ReceiveEvent.TextReceived(text))
+            return@withMailbox
+        }
+        val file = offer["file"] as? JsonObject
+        val directory = offer["directory"] as? JsonObject
+        val (name, size) =
+            when {
+                file != null -> {
+                    file.stringValue("filename") to file.longValue("filesize")
+                }
 
-                            else -> {
-                                null to null
-                            }
-                        }
-                    if (name == null || size == null || size < 0) {
-                        session.send(buildJsonObject { put("error", "unsupported offer") })
-                        throw WormholeProtocolException("Unsupported offer: $offer")
-                    }
+                directory != null -> {
+                    directory.stringValue("dirname")?.let { "$it.zip" } to
+                        directory.longValue("zipsize")
+                }
 
-                    val decision = CompletableDeferred<Destination?>()
-                    emit(
-                        ReceiveEvent.FileOffered(
-                            name,
-                            size,
-                            isDirectory = directory != null,
-                            decision,
-                            fileCount = directory?.longValue("numfiles")?.toInt(),
-                            unpackedSize = directory?.longValue("numbytes"),
-                        ),
-                    )
-                    val destination = decision.await()
-                    if (destination == null) {
-                        session.send(buildJsonObject { put("error", "transfer rejected") })
-                        handle.markHappy()
-                        return@withMailbox
-                    }
-                    val sink =
-                        try {
-                            destination.open()
-                        } catch (e: Exception) {
-                            // For example, the file exists already. The CLI answers the same way.
-                            session.send(buildJsonObject { put("error", "transfer rejected") })
-                            throw e
-                        }
-                    val network = transitNetwork()
-                    try {
-                        FileTransfer.receive(session, network, relay, senderTransit, size, sink) { received ->
-                            emit(ReceiveEvent.Progress(received, size))
-                        }
-                        handle.markHappy()
-                    } finally {
-                        network.close()
-                        sink.close()
-                        if (handle.mood != "happy") destination.discard()
-                    }
-                    emit(ReceiveEvent.FileReceived(destination.finish()))
+                else -> {
+                    null to null
                 }
             }
+        if (name == null || size == null || size < 0) {
+            session.send(buildJsonObject { put("error", "unsupported offer") })
+            throw WormholeProtocolException("Unsupported offer: $offer")
         }
+
+        val decision = CompletableDeferred<Destination?>()
+        emit(
+            ReceiveEvent.FileOffered(
+                name,
+                size,
+                isDirectory = directory != null,
+                decision,
+                fileCount = directory?.longValue("numfiles")?.toInt(),
+                unpackedSize = directory?.longValue("numbytes"),
+            ),
+        )
+        val destination = decision.await()
+        if (destination == null) {
+            session.send(buildJsonObject { put("error", "transfer rejected") })
+            handle.markHappy()
+            return@withMailbox
+        }
+        val sink =
+            try {
+                destination.open()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // For example, the disk is full. The CLI answers the same way.
+                session.send(buildJsonObject { put("error", "transfer rejected") })
+                throw e
+            }
+        onOpened(destination)
+        val network = transitNetwork()
+        try {
+            FileTransfer.receive(session, network, relay, senderTransit, size, sink) { received ->
+                emit(ReceiveEvent.Progress(received, size))
+            }
+            handle.markHappy()
+        } finally {
+            network.close()
+            sink.close()
+        }
+    }
 
     /** Reads phases until the sender's offer arrives. Also returns the sender's transit hints. */
     private suspend fun receiveOffer(session: WormholeSession): Pair<JsonObject, TransitHints?> {

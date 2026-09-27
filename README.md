@@ -37,7 +37,8 @@ wormhole.receive("7-guitarist-revenge").collect { event ->
         // Saves Downloads/photo.jpg, or unpacks a folder into Downloads/holiday. Or call event.reject().
         is ReceiveEvent.FileOffered -> event.acceptInto(Path("Downloads"))
         is ReceiveEvent.Progress -> println("${event.receivedBytes} / ${event.totalBytes}")
-        is ReceiveEvent.FileReceived -> println("Saved to ${event.path}")
+        ReceiveEvent.Unpacking -> println("Unpacking the folder")
+        is ReceiveEvent.FileReceived -> println("Saved to ${event.saved?.location}")
     }
 }
 ```
@@ -45,7 +46,25 @@ wormhole.receive("7-guitarist-revenge").collect { event ->
 What is supported: text, single files, directories and several files at once (sent as a zip), direct TCP connections and the transit relay.
 
 `acceptInto` keeps only the last part of the offered name, so a sender cannot write outside the
-folder, and it never overwrites: if the file or folder exists, the transfer is rejected.
+folder. It never overwrites: when a name is taken, it saves `photo (1).jpg`. Data goes to a
+hidden `.part` file first, so a failed transfer leaves nothing behind.
+
+### Other storage (Android MediaStore, iOS, ...)
+
+Implement `FileSaver` to save anywhere, and pass it to `acceptInto`. The library still unpacks
+folders, cleans names, and calls `discard()` when a transfer fails or is cancelled:
+
+```kotlin
+class DownloadsSaver : FileSaver {
+    override suspend fun createFile(name: String, size: Long): IncomingFile = TODO("sink + commit/discard")
+    override suspend fun createFolder(name: String): IncomingFolder = TODO("createFile(path) + commit/discard")
+}
+
+event.acceptInto(DownloadsSaver())                 // unpacks folders
+event.acceptInto(DownloadsSaver(), unpack = false) // keeps a folder as `<name>.zip`
+```
+
+Storage errors are reported as `SaveFailedException`.
 
 ### Data that is not a file
 
