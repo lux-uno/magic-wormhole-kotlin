@@ -6,7 +6,7 @@ Task-based examples. For installation, see the [README](../README.md).
 - [Send text](#send-text)
 - [Send a file](#send-a-file)
 - [Send a folder or several files](#send-a-folder-or-several-files)
-- [Send data that is not a file (Android `content://` URIs)](#send-data-that-is-not-a-file)
+- [Send a file on Android](#send-a-file-on-android)
 - [Receive on desktop](#receive-on-desktop)
 - [Ask the user before accepting](#ask-the-user-before-accepting)
 - [Receive on Android with a custom `FileSaver`](#receive-on-android-with-a-custom-filesaver)
@@ -68,29 +68,36 @@ To send several files that are not in one folder, give each one a path inside th
 receiver gets:
 
 ```kotlin
-val files =
-    listOf(
-        OutgoingFile(Path("/photos/IMG_1.jpg"), name = "beach.jpg"),
-        OutgoingFile(Path("/photos/IMG_2.jpg"), name = "day 2/sea.jpg"),
-    )
+val files = listOf(
+    OutgoingFile(Path("/photos/IMG_1.jpg"), name = "beach.jpg"),
+    OutgoingFile(Path("/photos/IMG_2.jpg"), name = "day 2/sea.jpg"),
+)
+
 wormhole.sendDirectory("holiday", files).collect { println(it) }
 ```
 
 A folder is sent as a zip, the same way the `wormhole` CLI sends one. Each file is read twice
 (once for its checksum, once to send it), so `open` must return the same bytes each time.
 
-## Send data that is not a file
+## Send a file on Android
 
-On Android, picked files are `content://` URIs, not paths. Wrap them in an `OutgoingFile`:
+On Android, picked files are `content://` URIs, not paths. Wrap them in an `OutgoingFile`.
+
+This helper is not part of the library; copy it into your project:
 
 ```kotlin
 fun Context.outgoingFile(uri: Uri): OutgoingFile {
-    val (name, size) =
-        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)!!
-            .use { it.moveToFirst(); it.getString(0) to it.getLong(1) }
+    val columns = arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
+    val (name, size) = contentResolver.query(uri, columns, null, null, null)!!
+        .use { it.moveToFirst(); it.getString(0) to it.getLong(1) }
+    
     return OutgoingFile(name, size) { contentResolver.openInputStream(uri)!!.asSource() }
 }
+```
 
+Then use it like this:
+
+```kotlin
 wormhole.sendFile(context.outgoingFile(uri)).collect { println(it) }
 ```
 
@@ -151,6 +158,7 @@ class DownloadsSaver(context: Context) : FileSaver {
     override suspend fun createFile(name: String, size: Long): IncomingFile =
         withContext(Dispatchers.IO) {
             val uri = insert(name, Environment.DIRECTORY_DOWNLOADS)
+
             object : IncomingFile {
                 override val sink = resolver.openOutputStream(uri)!!.asSink()
 
@@ -165,6 +173,7 @@ class DownloadsSaver(context: Context) : FileSaver {
 
     override suspend fun createFolder(name: String): IncomingFolder {
         val uris = mutableListOf<Uri>()
+
         return object : IncomingFolder {
             // MediaStore has no empty folders; they are created with their files.
             override fun createDirectory(path: String) = Unit
