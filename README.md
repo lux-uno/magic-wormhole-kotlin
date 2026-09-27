@@ -15,7 +15,7 @@ collecting coroutine to cancel the transfer. Errors are `WormholeException` subc
 (`WrongCodeException`, `TransferRejectedException`, `ServerConnectionException`, ...).
 
 ```kotlin
-val wormhole = Wormhole(WormholeConfig()) // defaults work with the `wormhole` CLI
+val wormhole = Wormhole() // the defaults work with the `wormhole` CLI
 
 // Send text
 wormhole.sendText("hello").collect { event ->
@@ -26,16 +26,16 @@ wormhole.sendText("hello").collect { event ->
     }
 }
 
-// Send a file (the library closes the source)
-val path = Path("photo.jpg")
-wormhole.sendFile("photo.jpg", SystemFileSystem.metadataOrNull(path)!!.size, SystemFileSystem.source(path))
-    .collect { println(it) }
+// Send a file or a whole folder
+wormhole.sendFile(Path("photo.jpg")).collect { println(it) }
+wormhole.sendDirectory(Path("holiday")).collect { println(it) }
 
 // Receive
 wormhole.receive("7-guitarist-revenge").collect { event ->
     when (event) {
         is ReceiveEvent.TextReceived -> println(event.text)
-        is ReceiveEvent.FileOffered -> event.accept(SystemFileSystem.sink(Path(event.name))) // or event.reject()
+        // Saves Downloads/photo.jpg, or unpacks a folder into Downloads/holiday. Or call event.reject().
+        is ReceiveEvent.FileOffered -> event.acceptInto(Path("Downloads"))
         is ReceiveEvent.Progress -> println("${event.receivedBytes} / ${event.totalBytes}")
         ReceiveEvent.FileReceived -> println("Done")
     }
@@ -44,24 +44,26 @@ wormhole.receive("7-guitarist-revenge").collect { event ->
 
 What is supported: text, single files, directories and several files at once (sent as a zip), direct TCP connections and the transit relay.
 
-### Directories and several files
+`acceptInto` keeps only the last part of the offered name, so a sender cannot write outside the
+folder, and it never overwrites: if the file or folder exists, the transfer is rejected.
+
+### Data that is not a file
+
+When the data does not come from a `Path` (for example an Android `content://` URI), use the
+stream versions:
 
 ```kotlin
-// Send: entries are relative paths; `open` is called twice (checksum pass, then send).
-wormhole.sendDirectory(
-    "holiday",
-    listOf(DirectoryEntry("beach.jpg", size) { SystemFileSystem.source(Path("beach.jpg")) }),
-).collect { println(it) }
+// Send `size` bytes from a source. The library closes it.
+wormhole.sendFile("photo.jpg", size, source)
 
-// Receive: a directory arrives as `<name>.zip` with isDirectory = true.
-// Save it (for example to a temporary file), then unpack it safely:
-unzip(
-    size = zipSize,
-    open = { offset -> SystemFileSystem.source(zipPath).buffered().apply { skip(offset) } },
-    target = myTarget, // an UnzipTarget that creates folders and files
-    maxBytes = offer.unpackedSize ?: Long.MAX_VALUE,
-    maxFiles = offer.fileCount ?: Int.MAX_VALUE,
-)
+// Send several files as a folder. `open` is called twice (checksum pass, then send).
+wormhole.sendDirectory("holiday", listOf(DirectoryEntry("beach.jpg", size) { openBeach() }))
+
+// Receive into any sink. A directory then arrives as `<name>.zip` with isDirectory = true.
+event.accept(sink)
+
+// Unpack a received zip safely, from a file or through your own UnzipTarget.
+unzip(zipPath, Path("Downloads", "holiday"), maxBytes = offer.unpackedSize!!, maxFiles = offer.fileCount!!)
 ```
 
 `sendDirectory` writes an uncompressed (stored) zip whose size is known before sending, so no

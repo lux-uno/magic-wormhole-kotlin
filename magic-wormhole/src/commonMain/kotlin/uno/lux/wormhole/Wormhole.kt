@@ -6,10 +6,14 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.io.Buffer
 import kotlinx.io.RawSink
 import kotlinx.io.RawSource
+import kotlinx.io.files.FileNotFoundException
+import kotlinx.io.files.Path
+import kotlinx.io.files.SystemFileSystem
 import kotlinx.io.readByteArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -77,25 +81,35 @@ public sealed interface ReceiveEvent {
     ) : ReceiveEvent
 
     /**
-     * The sender offers a file. Call [accept] or [reject]; the flow waits until you do.
+     * The sender offers a file. Call [acceptInto], [accept] or [reject]; the flow waits until you do.
      *
      * A directory (or several files) arrives as a zip file named `<dirname>.zip`: [isDirectory]
-     * is true, and [fileCount] and [unpackedSize] tell what is inside. Unpack it with [unzip],
-     * using [unpackedSize] and [fileCount] as limits.
+     * is true, and [fileCount] and [unpackedSize] tell what is inside. [acceptInto] unpacks it for
+     * you. With [accept], unpack it with [unzip], using [unpackedSize] and [fileCount] as limits.
      */
     public class FileOffered internal constructor(
         public val name: String,
         public val size: Long,
         public val isDirectory: Boolean,
-        private val decision: CompletableDeferred<RawSink?>,
+        private val decision: CompletableDeferred<Destination?>,
         /** Number of files in the directory, if the sender said. Null for a single file. */
         public val fileCount: Int? = null,
         /** Total size of the files in the directory, if the sender said. Null for a single file. */
         public val unpackedSize: Long? = null,
     ) : ReceiveEvent {
+        /**
+         * Saves the file in [folder], or unpacks the directory into a subfolder of [folder].
+         * Only the last part of the offered name is used, so nothing is written outside [folder].
+         * The transfer fails with an [kotlinx.io.IOException] (and the sender is told it was
+         * rejected) when a file or folder with that name already exists.
+         */
+        public fun acceptInto(folder: Path) {
+            decision.complete(FolderDestination(folder, this))
+        }
+
         /** Receives the file into [sink]. The library closes [sink] when the transfer ends. */
         public fun accept(sink: RawSink) {
-            decision.complete(sink)
+            decision.complete(SinkDestination(sink))
         }
 
         /** Declines the file. The flow then completes. */
@@ -182,7 +196,23 @@ public class Wormhole internal constructor(
         }
 
     /**
-     * Sends [size] bytes from [source] as a file called [name]. Emits
+     * Sends the file at [path], under the name [name]. Emits the same events as the other
+     * [sendFile]. Fails with [FileNotFoundException] when the flow is collected and there is no
+     * file at [path].
+     */
+    public fun sendFile(
+        path: Path,
+        name: String = path.name,
+    ): Flow<SendEvent> =
+        flow {
+            val metadata = SystemFileSystem.metadataOrNull(path)
+            if (metadata == null || !metadata.isRegularFile) throw FileNotFoundException("No file at $path")
+            emitAll(sendFile(name, metadata.size, SystemFileSystem.source(path)))
+        }
+
+    /**
+     * Sends [size] bytes from [source] as a file called [name]. Use this when the data is not a
+     * file on the file system, for example an Android `content://` URI. Emits
      * [SendEvent.CodeAllocated], [SendEvent.Progress] updates, then [SendEvent.Completed].
      * The library closes [source] when the transfer ends.
      */
@@ -218,6 +248,15 @@ public class Wormhole internal constructor(
                 source.close()
             }
         }
+
+    /**
+     * Sends the folder at [path] with all its files and subfolders, under the name [name]. Empty
+     * folders are not sent. Emits the same events as [sendFile].
+     */
+    public fun sendDirectory(
+        path: Path,
+        name: String = path.name,
+    ): Flow<SendEvent> = flow { emitAll(sendDirectory(name, filesIn(path))) }
 
     /**
      * Sends [entries] as a directory called [name], the way `wormhole send <dir>` does: as a zip
@@ -296,7 +335,7 @@ public class Wormhole internal constructor(
                         throw WormholeProtocolException("Unsupported offer: $offer")
                     }
 
-                    val decision = CompletableDeferred<RawSink?>()
+                    val decision = CompletableDeferred<Destination?>()
                     emit(
                         ReceiveEvent.FileOffered(
                             name,
@@ -307,12 +346,20 @@ public class Wormhole internal constructor(
                             unpackedSize = directory?.longValue("numbytes"),
                         ),
                     )
-                    val sink = decision.await()
-                    if (sink == null) {
+                    val destination = decision.await()
+                    if (destination == null) {
                         session.send(buildJsonObject { put("error", "transfer rejected") })
                         handle.markHappy()
                         return@withMailbox
                     }
+                    val sink =
+                        try {
+                            destination.open()
+                        } catch (e: Exception) {
+                            // For example, the file exists already. The CLI answers the same way.
+                            session.send(buildJsonObject { put("error", "transfer rejected") })
+                            throw e
+                        }
                     val network = transitNetwork()
                     try {
                         FileTransfer.receive(session, network, relay, senderTransit, size, sink) { received ->
@@ -322,7 +369,9 @@ public class Wormhole internal constructor(
                     } finally {
                         network.close()
                         sink.close()
+                        if (handle.mood != "happy") destination.discard()
                     }
+                    destination.finish()
                     emit(ReceiveEvent.FileReceived)
                 }
             }
