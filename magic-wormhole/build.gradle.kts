@@ -4,6 +4,14 @@ plugins {
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.kotlinSerialization)
     alias(libs.plugins.mavenPublish)
+    alias(libs.plugins.ktlint)
+}
+
+ktlint {
+    version = libs.versions.ktlint.get()
+    filter {
+        exclude { it.file.path.contains("${File.separator}build${File.separator}") }
+    }
 }
 
 // Needed so that composite builds (includeBuild) can substitute io.github.lux-uno:magic-wormhole.
