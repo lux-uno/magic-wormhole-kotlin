@@ -15,7 +15,6 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
-import kotlin.test.assertTrue
 
 class FileTransferTest {
     private val server = FakeMailboxServer()

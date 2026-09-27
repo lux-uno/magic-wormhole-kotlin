@@ -12,6 +12,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -21,6 +22,8 @@ import uno.lux.wormhole.crypto.DecryptionException
 import uno.lux.wormhole.crypto.SecretBox
 import uno.lux.wormhole.crypto.hkdfSha256
 import uno.lux.wormhole.crypto.randomBytes
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /** A bidirectional byte stream (a TCP connection in production). */
 internal interface TransitSocket {
@@ -153,15 +156,15 @@ internal class RecordPipe(
 /**
  * One side of a transit negotiation. Call [start] to get our `transit` message, send it to the
  * peer, then [connect] with the peer's hints. Direct hints are tried first; relays after
- * [relayDelayMs]. The first connection that completes the handshake wins.
+ * [relayDelay]. The first connection that completes the handshake wins.
  */
 internal class Transit(
     private val role: Role,
     private val transitKey: ByteArray,
     private val network: TransitNetwork,
     private val relay: DirectHint?,
-    private val relayDelayMs: Long = 2_000,
-    private val handshakeTimeoutMs: Long = 60_000,
+    private val relayDelay: Duration = 2.seconds,
+    private val handshakeTimeout: Duration = 60.seconds,
 ) {
     enum class Role { SENDER, RECEIVER }
 
@@ -195,7 +198,7 @@ internal class Transit(
                 var socket: TransitSocket? = null
                 try {
                     socket = open()
-                    withTimeout(handshakeTimeoutMs) { handshake(socket, viaRelay) }
+                    withTimeout(handshakeTimeout) { handshake(socket, viaRelay) }
                     val won =
                         when (role) {
                             Role.SENDER -> {
@@ -245,14 +248,14 @@ internal class Transit(
             for (hint in relays) {
                 attempts +=
                     launch {
-                        if (peer.direct.isNotEmpty() || listener != null) delay(relayDelayMs)
+                        if (peer.direct.isNotEmpty() || listener != null) delay(relayDelay)
                         attempt({ network.connect(hint.hostname, hint.port) }, viaRelay = true)
                     }
             }
             launch {
-                attempts.forEach { it.join() }
+                attempts.joinAll()
                 // With a listener the peer may still connect to us; give it the handshake timeout.
-                if (!winner.isCompleted && listener != null) delay(handshakeTimeoutMs)
+                if (!winner.isCompleted && listener != null) delay(handshakeTimeout)
                 winner.completeExceptionally(TransitException("Could not connect to the other side", lastError))
             }
             val socket =

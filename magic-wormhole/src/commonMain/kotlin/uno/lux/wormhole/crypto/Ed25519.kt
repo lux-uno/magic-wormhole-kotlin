@@ -4,7 +4,7 @@ package uno.lux.wormhole.crypto
 
 /**
  * An element of GF(2^255 - 19) as 16 limbs of 16 bits (TweetNaCl layout).
- * Values are not always fully reduced; [pack] gives the canonical encoding.
+ * Values are not always fully reduced; [Field.pack] gives the canonical encoding.
  */
 internal typealias Fe = LongArray
 
@@ -291,8 +291,8 @@ internal class EdPoint(
         for (i in 255 downTo 0) {
             val b = bit(i)
             swap(p, q, b)
-            q = q + p
-            p = p + p
+            q += p
+            p += p
             swap(p, q, b)
         }
         return p
@@ -333,12 +333,10 @@ internal object Ed25519 {
         Field.pow(
             Field.of(2),
             ByteArray(32) {
-                if (it == 0) {
-                    0xfb.toByte()
-                } else if (it == 31) {
-                    0x1f
-                } else {
-                    0xff.toByte()
+                when (it) {
+                    0 -> 0xfb.toByte()
+                    31 -> 0x1f
+                    else -> 0xff.toByte()
                 }
             },
         )

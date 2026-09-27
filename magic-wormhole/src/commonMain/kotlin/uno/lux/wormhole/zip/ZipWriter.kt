@@ -48,7 +48,7 @@ internal class ZipWriter(
     /** Returns the zip bytes. Each file is opened when the stream reaches it. */
     fun source(): RawSource {
         val parts =
-            sequence<() -> RawSource> {
+            sequence {
                 entries.forEachIndexed { i, entry ->
                     yield { Buffer().also { writeLocalHeader(i, it) } }
                     yield { CheckedSource(entry) }

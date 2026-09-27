@@ -34,4 +34,4 @@ internal fun hkdfSha256(
     return okm
 }
 
-internal fun randomBytes(size: Int): ByteArray = CryptoRand.Default.nextBytes(ByteArray(size))
+internal fun randomBytes(size: Int): ByteArray = CryptoRand.nextBytes(ByteArray(size))

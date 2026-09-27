@@ -110,7 +110,7 @@ class TextTransferTest {
                         wormhole().sendText("x").collect { if (it is SendEvent.CodeAllocated) code.complete(it.code) }
                     }
                 }
-            // A hand-written receiver that answers the offer with an error.
+            // A handwritten receiver that answers the offer with an error.
             val client = RendezvousClient.connect(server.transport, "ws://fake", DEFAULT_APP_ID, this)
             client.bind()
             val c = code.await()

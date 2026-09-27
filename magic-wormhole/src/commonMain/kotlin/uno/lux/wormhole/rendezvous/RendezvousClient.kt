@@ -14,6 +14,7 @@ import uno.lux.wormhole.ServerConnectionException
 import uno.lux.wormhole.WormholeException
 import uno.lux.wormhole.WormholeServerException
 import uno.lux.wormhole.crypto.randomBytes
+import kotlin.time.Duration.Companion.seconds
 
 /** A text-message connection to a mailbox server (a WebSocket in production). */
 internal interface RendezvousConnection {
@@ -142,7 +143,7 @@ internal class RendezvousClient private constructor(
 
     suspend fun release(nameplate: String) {
         send(ClientMessage.Release(nameplate))
-        withTimeoutOrNull(REPLY_TIMEOUT_MS) { awaitReply<ServerMessage.Released>() }
+        withTimeoutOrNull(REPLY_TIMEOUT) { awaitReply<ServerMessage.Released>() }
     }
 
     /** Closes the mailbox with [mood] and then the connection. Best effort; never throws. */
@@ -153,7 +154,7 @@ internal class RendezvousClient private constructor(
         withContext(NonCancellable) {
             try {
                 send(ClientMessage.Close(mailbox, mood))
-                withTimeoutOrNull(REPLY_TIMEOUT_MS) { awaitReply<ServerMessage.Closed>() }
+                withTimeoutOrNull(REPLY_TIMEOUT) { awaitReply<ServerMessage.Closed>() }
             } catch (_: WormholeException) {
             }
             shutdown()
@@ -174,7 +175,7 @@ internal class RendezvousClient private constructor(
 
     companion object {
         val CLIENT_VERSION = listOf("kotlin", "magic-wormhole-kotlin 0.1.0")
-        private const val REPLY_TIMEOUT_MS = 5_000L
+        private val REPLY_TIMEOUT = 5.seconds
 
         suspend fun connect(
             transport: RendezvousTransport,

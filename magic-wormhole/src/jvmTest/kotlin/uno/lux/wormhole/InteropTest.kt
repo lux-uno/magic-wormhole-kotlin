@@ -13,6 +13,8 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Talks to the real `wormhole` CLI (magic-wormhole) through the public relay.
@@ -30,7 +32,7 @@ class InteropTest {
     @Test
     fun kotlinSendsTextToTheCli() =
         runBlocking {
-            withTimeout(60_000) {
+            withTimeout(60.seconds) {
                 val code = CompletableDeferred<String>()
                 val sender =
                     async {
@@ -55,7 +57,7 @@ class InteropTest {
     @Test
     fun cliSendsTextToKotlin() =
         runBlocking {
-            withTimeout(60_000) {
+            withTimeout(60.seconds) {
                 val p = withContext(Dispatchers.IO) { cli("send", "--hide-progress", "--text", "hello from python") }
                 val code =
                     withContext(Dispatchers.IO) {
@@ -85,7 +87,7 @@ class InteropTest {
     @Test
     fun kotlinSendsFileToTheCli() =
         runBlocking {
-            withTimeout(120_000) {
+            withTimeout(2.minutes) {
                 val file = randomFile(3_000_000)
                 val target =
                     kotlin.io.path
@@ -117,7 +119,7 @@ class InteropTest {
     @Test
     fun cliSendsFileToKotlin() =
         runBlocking {
-            withTimeout(120_000) {
+            withTimeout(2.minutes) {
                 val file = randomFile(2_000_000)
                 val p = withContext(Dispatchers.IO) { cli("send", "--hide-progress", file.path) }
                 val code =
@@ -146,7 +148,7 @@ class InteropTest {
     @Test
     fun kotlinSendsDirectoryToTheCli() =
         runBlocking {
-            withTimeout(120_000) {
+            withTimeout(2.minutes) {
                 val files =
                     mapOf(
                         "a.txt" to "hello".encodeToByteArray(),
@@ -188,7 +190,7 @@ class InteropTest {
     @Test
     fun cliSendsDirectoryToKotlin() =
         runBlocking {
-            withTimeout(120_000) {
+            withTimeout(2.minutes) {
                 val dir =
                     kotlin.io.path
                         .createTempDirectory("wormhole-dir")
@@ -267,7 +269,7 @@ class InteropTest {
     @Test
     fun fileThroughThePublicTransitRelay() =
         runBlocking {
-            withTimeout(120_000) {
+            withTimeout(2.minutes) {
                 val data = ByteArray(1_000_000).also { java.util.Random(7).nextBytes(it) }
                 val code = CompletableDeferred<String>()
                 val sender =
@@ -288,7 +290,7 @@ class InteropTest {
     @Test
     fun kotlinToKotlinOverThePublicRelay() =
         runBlocking {
-            withTimeout(60_000) {
+            withTimeout(60.seconds) {
                 val code = CompletableDeferred<String>()
                 val sender =
                     async {
