@@ -5,16 +5,15 @@ Status: not started.
 ## Goal
 
 Generate the API reference from the KDoc comments with [Dokka](https://kotlinlang.org/docs/dokka-introduction.html),
-build it in GitHub Actions on every push to `main`, and publish it with GitHub Pages at
-`https://lux-uno.github.io/magic-wormhole-kotlin/`. [docs/usage.md](../docs/usage.md) stays the
+build it in GitHub Actions when a release tag (`v0.2.0`) is pushed, and publish it with GitHub
+Pages at `https://lux-uno.github.io/magic-wormhole-kotlin/`. The docs then always match a version
+that users can download. See "Releases" in [AGENTS.md](../AGENTS.md) for the release steps. [docs/usage.md](../docs/usage.md) stays the
 task-based guide; the Dokka site is the reference for every public class and function.
 
 ## Cost
 
-Free. GitHub Pages and GitHub-hosted Linux runners cost nothing for public repositories. For a
-private repository, Pages needs a paid plan (GitHub Pro, Team or Enterprise); the build job would
-use the free monthly Actions minutes. Dokka runs on `ubuntu-latest`, which counts 1x (macOS
-counts 10x).
+Free: the repository is public, and GitHub Pages and GitHub-hosted Linux runners cost nothing
+for public repositories. The workflow runs only on release tags, so it runs rarely.
 
 ## Steps
 
@@ -27,6 +26,7 @@ counts 10x).
   ```kotlin
   dokka {
       moduleName = "magic-wormhole-kotlin"
+      moduleVersion = project.version.toString()
       dokkaPublications.html {
           includes.from("Module.md")
       }
@@ -34,7 +34,8 @@ counts 10x).
           reportUndocumented = true
           sourceLink {
               localDirectory = rootDir
-              remoteUrl("https://github.com/lux-uno/magic-wormhole-kotlin/tree/main")
+              // Source links point at the release tag, so they match the documented version.
+              remoteUrl("https://github.com/lux-uno/magic-wormhole-kotlin/tree/v${project.version}")
               remoteLineSuffix = "#L"
           }
       }
@@ -69,15 +70,17 @@ dokkaSourceSets.matching { it.name.startsWith("ios") }.configureEach { suppress 
 New file `.github/workflows/docs.yml`:
 
 ```yaml
-# Builds the API reference with Dokka and publishes it with GitHub Pages.
+# Builds the API reference with Dokka and publishes it with GitHub Pages, for each release tag.
+# To publish again without a new release (for example after a failed run), start the workflow by
+# hand and pick the tag under "Use workflow from".
 name: API docs
 
 on:
   push:
-    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
 
-# One deployment at a time; a newer push replaces a waiting one.
+# One deployment at a time; a newer tag replaces a waiting one.
 concurrency:
   group: pages
   cancel-in-progress: true
@@ -91,6 +94,13 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+      - name: Check that the tag matches the version
+        run: |
+          version=$(grep '^VERSION_NAME=' gradle.properties | cut -d= -f2)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::$GITHUB_REF_NAME does not match VERSION_NAME=$version in gradle.properties"
+            exit 1
+          fi
       - uses: actions/setup-java@v5
         with:
           distribution: zulu
@@ -117,11 +127,15 @@ jobs:
 ```
 
 Check the action versions when doing this step (`deploy-pages` was at v5 in September 2026).
+The version check also stops a manual run from a branch: the docs only come from release tags.
 
 ### 5. Turn on GitHub Pages (5 minutes, repository owner)
 
-Repository **Settings → Pages → Build and deployment → Source: GitHub Actions**. No `gh-pages`
-branch is needed.
+1. Repository **Settings → Pages → Build and deployment → Source: GitHub Actions**. No `gh-pages`
+   branch is needed.
+2. **Settings → Environments → github-pages → Deployment branches and tags**: add a rule for the
+   tag pattern `v*`. By default this environment only accepts the default branch, so without the
+   rule every deployment from a tag is rejected.
 
 ### 6. Link the site (10 minutes)
 
@@ -131,14 +145,13 @@ branch is needed.
 
 ## Later
 
-- **Versioned docs:** publish the docs of each release next to the latest one with Dokka's
-  versioning plugin, triggered on release tags instead of every push.
+- **Versioned docs:** keep the docs of older releases next to the latest one with Dokka's
+  versioning plugin.
 - **Fail on missing KDoc:** once the gaps are filled, run Dokka in the `CI` workflow on pull
   requests with `failOnWarning = true`, so new public API cannot land without KDoc.
 
-## Decisions to make
+## Decisions
 
-1. Publish on every push to `main` (docs match the code) or only on releases (docs match the
-   published artifact)? Proposed: every push until the first release, then add versioned docs.
-2. Is the repository public? If not, Pages needs a paid plan, or the docs stay a build artifact
-   only.
+1. Publish on release tags, not on every push to `main`, so the docs match the published
+   artifact. Doc fixes between releases appear with the next release.
+2. The repository is public, so Pages is free.

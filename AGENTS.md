@@ -46,6 +46,26 @@ so `commonTest` can run full transfers in memory.
 Mention the origin at the top of a ported file (for example "Ported from TweetNaCl (public
 domain)"). Add new sources to `THIRD_PARTY_NOTICES.md`.
 
+## Releases
+
+Every release gets a new version number and a git tag. Never publish without both.
+
+1. **Pick the version.** Follow [Semantic Versioning](https://semver.org/). Before 1.0, a breaking
+   change to the public API raises the minor version (0.1.0 → 0.2.0); anything else raises the
+   patch version (0.1.0 → 0.1.1).
+2. **Set it.** In `gradle.properties`, set `VERSION_NAME` to the release version, without
+   `-SNAPSHOT`. Commit: `Release 0.2.0`.
+3. **Tag that commit, before publishing:** `git tag -a v0.2.0 -m "Release 0.2.0"`. The tag is `v`
+   followed by `VERSION_NAME`, exactly.
+4. **Publish** the artifact from the tagged commit.
+5. **Push the commit and the tag:** `git push origin main v0.2.0`. Once the docs workflow from
+   `plans/dokka-api-docs.md` exists, the pushed tag publishes the API docs; it fails when the tag
+   does not match `VERSION_NAME`.
+6. **Start the next version.** Set `VERSION_NAME` to the next snapshot, for example
+   `0.2.1-SNAPSHOT`. Commit: `Start 0.2.1 development`.
+
+Never move or delete a pushed tag. If a release is wrong, release a new version.
+
 ## Commands
 
 | Task | Command |
