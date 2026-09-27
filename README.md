@@ -3,110 +3,48 @@
 A Kotlin Multiplatform implementation of the [Magic Wormhole](https://magic-wormhole.readthedocs.io/)
 protocol. Send text and files between devices using a short code like `7-guitarist-revenge`.
 
-- Pure Kotlin: no native libraries.
+## Features
+
+- Pure Kotlin: no native libraries, coroutines-first API.
 - Targets: Windows, macOS, Linux, Android, iOS
-- Coroutines-first API.
 - Compatible with the Python `wormhole` CLI.
-- Folders unpack while they download: half the disk space, and no wait for unpacking at the end.
+
+**What is supported:**
+- Send text, multiple files, or a directory
+- Direct TCP connections and the transit relay
+- Zipped folders unpack while they download, using half the disk space compared to other libraries, and no wait for unpacking at the end
+
+**What is missing:**
+- Tor support
+- Dilation (reconnectable transit protocol)
+- Multiple simultaneous file offers in one session (we zip them instead)
 
 ## Usage
 
-For more examples (Android `content://` URIs, a MediaStore `FileSaver`, error handling), see
-[docs/usage.md](docs/usage.md).
-
-Every operation returns a cold `Flow`. The transfer runs while you collect it; cancel the
-collecting coroutine to cancel the transfer. Errors are `WormholeException` subclasses
-(`WrongCodeException`, `TransferRejectedException`, `ServerConnectionException`, ...).
+**Read the full documentation at [docs/usage.md](docs/usage.md).**
 
 ```kotlin
-val wormhole = Wormhole() // the defaults work with the `wormhole` CLI
+val wormhole = Wormhole()
 
-// Send text
-wormhole.sendText("hello").collect { event ->
-    when (event) {
-        is SendEvent.CodeAllocated -> println("Code: ${event.code}")
-        SendEvent.Completed -> println("Sent")
-    }
-}
-
-// Send a file or a whole folder
+// Send a file or a whole folder or text
 wormhole.sendFile(Path("photo.jpg")).collect { println(it) }
 wormhole.sendDirectory(Path("holiday")).collect { println(it) }
+wormhole.sendText("Hello, World!").collect { println(it) }
 
 // Receive
 wormhole.receive("7-guitarist-revenge").collect { event ->
     when (event) {
         is ReceiveEvent.TextReceived -> println(event.text)
-        // Saves Downloads/photo.jpg, or unpacks a folder into Downloads/holiday. Or call event.reject().
-        is ReceiveEvent.FileOffered -> event.acceptInto(Path("Downloads"))
+        is ReceiveEvent.FileOffered -> {
+            // Saves as `Downloads/photo.jpg`, or unpacks a folder into `Downloads/holiday`
+            event.acceptInto(Path("Downloads")) // Or call `event.reject()`
+        }
         is ReceiveEvent.Progress -> println("${event.receivedBytes} / ${event.totalBytes}")
         ReceiveEvent.Unpacking -> println("Unpacking the folder")
         is ReceiveEvent.FileReceived -> println("Saved to ${event.saved?.location}")
     }
 }
 ```
-
-What is supported: text, single files, directories and several files at once (sent as a zip), direct TCP connections and the transit relay.
-
-`acceptInto` keeps only the last part of the offered name, so a sender cannot write outside the
-folder. It never overwrites: when a name is taken, it saves `photo (1).jpg`. Data goes to a
-hidden `.part` file first, so a failed transfer leaves nothing behind.
-
-### Unpacking folders
-
-A folder arrives as a zip. By default the library unpacks it while it downloads, so it never
-stores the zip. Other clients, like the Python CLI, save the whole zip first and then unpack it:
-twice the disk space, and a wait at the end.
-
-To save the zip first instead:
-
-```kotlin
-Wormhole(WormholeConfig(folderUnpacker = FolderUnpacker.temporaryFile()))
-```
-
-Or implement `FolderUnpacker` yourself.
-
-### Other storage (Android MediaStore, iOS, ...)
-
-Implement `FileSaver` to save anywhere, and pass it to `acceptInto`. The library still unpacks
-folders, cleans names, and calls `discard()` when a transfer fails or is cancelled:
-
-```kotlin
-class DownloadsSaver : FileSaver {
-    override suspend fun createFile(name: String, size: Long): IncomingFile = TODO("sink + commit/discard")
-    override suspend fun createFolder(name: String): IncomingFolder = TODO("createFile(path) + commit/discard")
-}
-
-event.acceptInto(DownloadsSaver())                 // unpacks folders
-event.acceptInto(DownloadsSaver(), unpack = false) // keeps a folder as `<name>.zip`
-```
-
-Storage errors are reported as `SaveFailedException`.
-
-### Data that is not a file
-
-When the data does not come from a `Path` (for example an Android `content://` URI), use the
-stream versions:
-
-```kotlin
-// `open` returns a new source each time; the library opens it only when the transfer runs.
-val photo = OutgoingFile("beach.jpg", size) { openBeach() }
-wormhole.sendFile(photo)
-
-// Several files as a folder. Names are paths inside it. Each file is opened twice (checksum, then send).
-wormhole.sendDirectory("holiday", listOf(photo, OutgoingFile("day 2/sea.jpg", seaSize) { openSea() }))
-
-// Receive into any sink. A directory then arrives as `<name>.zip` with isDirectory = true.
-event.accept(sink)
-
-// Unpack a received zip safely, from a file or through your own UnzipTarget.
-unzip(zipPath, Path("Downloads", "holiday"), maxBytes = offer.unpackedSize!!, maxFiles = offer.fileCount!!)
-```
-
-`sendDirectory` writes an uncompressed (stored) zip whose size is known before sending, so no
-temporary file is needed. `unzip` reads stored and deflated zips (including Zip64 and the
-streamed zips of the `wormhole` CLI), rejects paths that leave the target folder, checks every
-CRC, and stops when the zip holds more than the announced bytes or files.
 
 ## Installation
 
