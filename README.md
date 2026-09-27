@@ -5,7 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A Kotlin Multiplatform implementation of the [Magic Wormhole](https://magic-wormhole.readthedocs.io/)
-protocol. Send text and files between devices using a short code like `7-guitarist-revenge`.
+protocol. Move files and text between two devices over a direct, end-to-end encrypted connection —
+paired with a short code, no accounts required.
 
 ## Features
 
