@@ -1,3 +1,4 @@
+import org.gradle.plugins.signing.SigningExtension
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -6,6 +7,7 @@ plugins {
     alias(libs.plugins.mavenPublish)
     alias(libs.plugins.ktlint)
     alias(libs.plugins.dokka)
+    signing
 }
 
 ktlint {
@@ -118,6 +120,10 @@ mavenPublishing {
             developerConnection = "scm:git:ssh://git@github.com/lux-uno/magic-wormhole-kotlin.git"
         }
     }
-    // Maven Central upload and signing are enabled when the credentials exist:
-    // publishToMavenCentral(); signAllPublications()
+    publishToMavenCentral()
+    signAllPublications()
+}
+
+extensions.configure<SigningExtension> {
+    useGpgCmd()
 }
