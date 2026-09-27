@@ -53,7 +53,20 @@ wormhole.receive("7-guitarist-revenge").collect { event ->
 
 ## Installation
 
-Using Gradle:
+Using Gradle, in a Kotlin Multiplatform module, add it to `commonMain` — the library resolves to
+the right platform artifact (JVM, iOS) automatically:
+
+```kotlin
+kotlin {
+    sourceSets {
+        commonMain.dependencies {
+            implementation("io.github.lux-uno:magic-wormhole:1.0.1")
+        }
+    }
+}
+```
+
+For a JVM-only project:
 
 ```kotlin
 dependencies {
