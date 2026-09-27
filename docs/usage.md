@@ -70,8 +70,8 @@ receiver gets:
 ```kotlin
 val files =
     listOf(
-        OutgoingFile("beach.jpg", size = 2_000_000) { SystemFileSystem.source(Path("/photos/IMG_1.jpg")) },
-        OutgoingFile("day 2/sea.jpg", size = 3_000_000) { SystemFileSystem.source(Path("/photos/IMG_2.jpg")) },
+        OutgoingFile(Path("/photos/IMG_1.jpg"), name = "beach.jpg"),
+        OutgoingFile(Path("/photos/IMG_2.jpg"), name = "day 2/sea.jpg"),
     )
 wormhole.sendDirectory("holiday", files).collect { println(it) }
 ```

@@ -134,6 +134,29 @@ class PathTransferTest {
         }
 
     @Test
+    fun severalFilesCanBeBuiltFromPathsWithoutGivingTheSize() =
+        runTest {
+            write(Path(outbox, "IMG_1.jpg"), content(1000))
+            write(Path(outbox, "IMG_2.jpg"), content(2000))
+            val files =
+                listOf(
+                    OutgoingFile(Path(outbox, "IMG_1.jpg"), name = "beach.jpg"),
+                    OutgoingFile(Path(outbox, "IMG_2.jpg"), name = "day 2/sea.jpg"),
+                )
+
+            assertNull(transfer { sendDirectory("holiday", files) })
+
+            assertContentEquals(content(1000), read(Path(inbox, "holiday", "beach.jpg")))
+            assertContentEquals(content(2000), read(Path(inbox, "holiday", "day 2", "sea.jpg")))
+        }
+
+    @Test
+    fun buildingAnOutgoingFileFromAMissingPathFailsImmediately() =
+        runTest {
+            assertFailsWith<FileNotFoundException> { OutgoingFile(Path(outbox, "missing.txt")) }
+        }
+
+    @Test
     fun sendingAMissingFileFailsWhenCollected() =
         runTest {
             val flow = wormhole("10.0.0.1").sendFile(Path(outbox, "missing.txt"))

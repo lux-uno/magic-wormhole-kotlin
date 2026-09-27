@@ -175,6 +175,17 @@ public class OutgoingFile(
         require(size >= 0) { "Negative size for $name" }
     }
 
+    /**
+     * The file at [path], under [name]. Fails immediately with [FileNotFoundException] when
+     * there is no file at [path].
+     */
+    public constructor(path: Path, name: String = path.name) : this(
+        name,
+        SystemFileSystem.metadataOrNull(path)?.takeIf { it.isRegularFile }?.size
+            ?: throw FileNotFoundException("No file at $path"),
+        { SystemFileSystem.source(path) },
+    )
+
     override fun toString(): String = "OutgoingFile(name=$name, size=$size)"
 
     internal fun checksummed(): ZipFileEntry {
