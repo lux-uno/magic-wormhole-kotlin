@@ -1,4 +1,4 @@
-# Lint and unit tests on every push and pull request. Pull requests also run the iOS tests.
+# Lint and unit tests on pushes to main and on pull requests. Pull requests also run the iOS tests.
 #
 # Cost: this workflow only uses GitHub-hosted runners, which are free for public repositories and
 # use the free monthly minutes of a private one. The macOS job (iOS) counts 10x against those
@@ -6,14 +6,18 @@
 # ENABLE_MACOS_CI is "true".
 name: CI
 
+# Push runs only on main; other branches are covered by their pull request. This way each commit
+# is tested once, not once for the push and again for the pull request.
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Cancel superseded pull request runs; let every run on main finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
