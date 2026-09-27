@@ -11,6 +11,9 @@ protocol. Send text and files between devices using a short code like `7-guitari
 
 ## Usage
 
+For more examples (Android `content://` URIs, a MediaStore `FileSaver`, error handling), see
+[docs/usage.md](docs/usage.md).
+
 Every operation returns a cold `Flow`. The transfer runs while you collect it; cancel the
 collecting coroutine to cancel the transfer. Errors are `WormholeException` subclasses
 (`WrongCodeException`, `TransferRejectedException`, `ServerConnectionException`, ...).

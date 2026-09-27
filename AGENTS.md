@@ -29,6 +29,12 @@ The public API is small and documented; everything else is `internal` (`explicit
 Network access goes through small interfaces (`RendezvousTransport`, transit connection factory),
 so `commonTest` can run full transfers in memory.
 
+## Documentation
+
+- `README.md`: overview and the shortest examples.
+- `docs/usage.md`: task-based examples. Update it when the public API changes.
+- `plans/`: plans for larger work, for example `plans/dokka-api-docs.md`.
+
 ## Code style
 
 - ktlint (`ktlint_official`) via the `org.jlleitschuh.gradle.ktlint` plugin; rules in `.editorconfig`.
