@@ -60,7 +60,8 @@ Every release gets a new version number and a git tag. Never publish without bot
    change to the public API raises the minor version (0.1.0 → 0.2.0); anything else raises the
    patch version (0.1.0 → 0.1.1).
 2. **Set it.** In `gradle.properties`, set `VERSION_NAME` to the release version, without
-   `-SNAPSHOT`. Commit: `Release 0.2.0`.
+   `-SNAPSHOT`. Also update the version in `README.md`'s Installation section
+   (`implementation("io.github.lux-uno:magic-wormhole:<version>")`). Commit: `Release 0.2.0`.
 3. **Tag that commit, before publishing:** `git tag -a v0.2.0 -m "Release 0.2.0"`. The tag is `v`
    followed by `VERSION_NAME`, exactly.
 4. **Publish** the artifact from the tagged commit.
