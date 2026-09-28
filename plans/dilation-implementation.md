@@ -138,6 +138,43 @@ it.
        needs it — at that point design the public surface around that caller's actual shape rather
        than speculatively now.
 
+## Remaining work
+
+The 11 tasks above cover the protocol core. What they don't cover, roughly in priority order:
+
+1. **No public API.** Everything in `uno.lux.wormhole.dilation` is `internal` (task 11's deliberate
+   deferral). Nothing outside this module can use Dilation yet — this is the main blocker to it
+   being useful, not just complete.
+2. **Large-record chunking is missing — a real protocol-fidelity bug, not a nice-to-have.** Python
+   splits any Noise message payload over `NOISE_MAX_PAYLOAD` (65,519 bytes) into multiple
+   concatenated ciphertext chunks within one frame (`_noise.py`'s `NOISE_MAX_PAYLOAD`/
+   `NOISE_MAX_CIPHERTEXT`, applied in `connection.py`'s `send_record`/`decrypt_message`).
+   `DilationConnection.sendRecord`/`receiveRecord` currently encrypt/decrypt the whole record in one
+   Noise call with no size limit — fine for control records, but a DATA payload over ~64KB would
+   produce a frame a real Python peer's `decrypt_message` wouldn't parse correctly. Needs fixing
+   before this could interop with anything beyond another instance of this library.
+3. **No interop test against a real Python `wormhole` peer.** Every test here runs against
+   `transit/FakeInternet.kt` (in-memory), and the crypto layer is cross-checked against independent
+   Python reimplementations, not against `python-noise`/a live peer. That's solid for
+   correctness-in-isolation but the only way to be confident the wire format is truly byte-compatible
+   is to actually exchange bytes with the genuine `magic-wormhole` CLI/library once a Python
+   Dilation-using tool is reachable (see `close-python-feature-gaps.md` §4's original phase 6).
+4. **No consumer-facing subchannel object.** The surface today is
+   `events: ReceiveChannel<DilationInboundEvent>` plus `openSubchannel`/`sendData`/`closeSubchannel`
+   by raw scid — there's no stream-like "get a `Source`/`Sink` for subchannel N" abstraction (task
+   9's deliberate deferral, for the same reason as #1: no caller to design it around yet).
+5. **Tor support** — explicitly out of scope, tracked separately in `plans/tor.md`.
+6. **Status/observer callbacks** (Python's `DilationStatus`/`WormholeStatus`) — a UI-facing
+   nice-to-have surfacing connecting/reconnecting/connected state and timestamps; not implemented.
+7. **Concurrent writes during a reconnect gap aren't fully guarded.** An app calling
+   `sendData`/`openSubchannel` while `establishConnection()` is mid-swap of the `connection` field
+   could hit a stale/closed reference. Not exercised by any test since nothing calls it concurrently
+   yet; worth a real look once #1/#4 give this a real caller with real concurrency patterns.
+
+Of these, #2 is worth fixing regardless of what else happens — it's a correctness bug, not a scope
+decision. Everything else depends on deciding what the public API (#1) should look like, which in
+turn depends on what a real caller in `wormhole-rift` (or elsewhere) actually needs.
+
 ## Conventions to follow (already established elsewhere in this repo)
 
 - Manual `JsonObject` construction for wire messages, no `@Serializable` model classes — match
