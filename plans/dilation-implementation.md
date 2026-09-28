@@ -83,9 +83,19 @@ it.
       wrong-PSK Noise failure. Folded 7 and 8 into one task since KCM/selection and the framing it
       rides on aren't meaningfully separable — you can't test "first viable wins" without the KCM
       exchange that defines viability.
-- [ ] 9. `dilation/DilationSubchannel.kt` + subchannel support in `DilationManager.kt`: OPEN/DATA/CLOSE,
-      scid allocation by role, buffering for data arriving before a consumer attaches, ACK watermark,
-      outbound retry queue.
+- [x] 9. `dilation/DilationRecord.kt` (all 7 record types + big-endian codec, generalizing the
+      KCM-only logic from task 7-8) and multiplexing support added directly to
+      `DilationManager.kt`: `connect()` now also exchanges `connection-hints` (`dilate-1`), races the
+      connection via `DilationConnector`, and launches a background reader that ACKs every inbound
+      OPEN/DATA/CLOSE (even stale ones, matching `Manager.got_record`), drops already-delivered ones
+      via a monotonic watermark, and retires outbound entries once ACKed. `openSubchannel`/
+      `sendData`/`closeSubchannel` assign the next scid (odd for Leader starting at 1, even for
+      Follower starting at 2) or seqnum and queue+send. Deliberately **not** built yet: a
+      consumer-facing `DilationSubchannel` object with pre-attach buffering — there is no real
+      consumer/public API to attach to until task 11 decides one, so `events: ReceiveChannel<...>`
+      is the manager-level surface for now; build the richer subchannel object once something needs
+      it. Tests reuse `transit/FakeInternet.kt` again; a same-instant reconnection swap (moving
+      unretired queue entries to a new connection) is task 10's job, not this one.
 - [ ] 10. Reconnection: full `DilationManager` state machine (table in
        `close-python-feature-gaps.md §4`), ping/pong liveness timer, `reconnect`/`reconnecting`
        handshake, resend of the unretired queue on the new connection. Test: drop the fake connection
