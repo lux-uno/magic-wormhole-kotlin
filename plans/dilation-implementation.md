@@ -31,9 +31,12 @@ it.
       avoid transcription errors); the 1-iteration and 1000-iteration `k=u=9` results match the
       published RFC 7748 §5.2 values exactly. Skipped the 1,000,000-iteration vector (slow, and the
       1000-iteration one already exercises the same code path).
-- [ ] 3. `crypto/ChaCha20Poly1305.kt` — AEAD (RFC 8439). Test first: `ChaCha20Poly1305VectorsTest.kt`
-      using RFC 8439's published vectors (both the raw ChaCha20 block vectors and the full AEAD
-      vectors with AAD).
+- [x] 3. `crypto/ChaCha20Poly1305.kt` — ChaCha20 stream cipher + AEAD (RFC 8439), reusing the
+      existing `Poly1305.mac` primitive from `SecretBox.kt` rather than reimplementing it. Vectors
+      in `ChaCha20Poly1305Vectors.kt` are independently generated with Python's `cryptography`
+      library (same rationale as the X25519 vectors: avoids hand-transcription errors from the RFC
+      text), covering empty/short/AAD-only/unaligned/multi-block cases plus tamper and wrong-AAD
+      rejection tests.
 - [ ] 4. `crypto/Blake2s.kt` — hash (RFC 7693). Test first: `Blake2sVectorsTest.kt` using RFC 7693's
       vectors plus the official BLAKE2 test vector file if more coverage is wanted.
 - [ ] 5. `crypto/Noise.kt` — minimal handshake state for exactly `Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s`
