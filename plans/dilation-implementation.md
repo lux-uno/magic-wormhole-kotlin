@@ -25,10 +25,12 @@ it.
 ## Tasks (one task = one commit)
 
 - [x] 1. Record findings in `close-python-feature-gaps.md §4` (done alongside this plan).
-- [ ] 2. `crypto/Curve25519.kt` — X25519 (RFC 7748 Montgomery ladder). Test first:
-      `Curve25519VectorsTest.kt` using RFC 7748 §5.2's fixed vectors (and the iterated
-      1/1000/1000000 test if cheap enough to run on every `jvmTest`; skip the 1000000 iteration in
-      common test runs if it makes CI slow, keep it as a JVM-only stress test if so).
+- [x] 2. `crypto/Curve25519.kt` — X25519 (RFC 7748 Montgomery ladder), built on the existing `Field`
+      GF(2^255-19) arithmetic in `Ed25519.kt`. Vectors in `Curve25519Vectors.kt` are independently
+      generated with Python's `cryptography` library rather than hand-transcribed from the RFC (to
+      avoid transcription errors); the 1-iteration and 1000-iteration `k=u=9` results match the
+      published RFC 7748 §5.2 values exactly. Skipped the 1,000,000-iteration vector (slow, and the
+      1000-iteration one already exercises the same code path).
 - [ ] 3. `crypto/ChaCha20Poly1305.kt` — AEAD (RFC 8439). Test first: `ChaCha20Poly1305VectorsTest.kt`
       using RFC 8439's published vectors (both the raw ChaCha20 block vectors and the full AEAD
       vectors with AAD).

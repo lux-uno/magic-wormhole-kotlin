@@ -12,7 +12,7 @@ The public API: [uno.lux.wormhole.Wormhole] and the types used to configure it, 
 
 # Package uno.lux.wormhole.crypto
 
-SHA-256, HMAC, HKDF, XSalsa20-Poly1305 secretbox, Ed25519, and SPAKE2. Internal.
+SHA-256, HMAC, HKDF, XSalsa20-Poly1305 secretbox, Ed25519, SPAKE2, and X25519. Internal.
 
 # Package uno.lux.wormhole.code
 
