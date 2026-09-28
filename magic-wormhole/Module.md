@@ -12,8 +12,9 @@ The public API: [uno.lux.wormhole.Wormhole] and the types used to configure it, 
 
 # Package uno.lux.wormhole.crypto
 
-SHA-256, HMAC, HKDF, XSalsa20-Poly1305 secretbox, Ed25519, SPAKE2, X25519, ChaCha20-Poly1305, and
-BLAKE2s. Internal.
+SHA-256, HMAC, HKDF, XSalsa20-Poly1305 secretbox, Ed25519, SPAKE2, X25519, ChaCha20-Poly1305,
+BLAKE2s, and a Noise Protocol handshake scoped to `Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s`
+(Dilation's L2 handshake). Internal.
 
 # Package uno.lux.wormhole.code
 

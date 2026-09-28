@@ -43,13 +43,18 @@ it.
       left out rather than built and left untested. Vectors in `Blake2sVectors.kt` come from Python's
       `hashlib.blake2s`/`hmac`; the `"abc"` digest matches the well-known published BLAKE2s-256
       test value as a cross-check.
-- [ ] 5. `crypto/Noise.kt` — minimal handshake state for exactly `Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s`
-      (not a general Noise engine), built on tasks 2-4. Test first: `NoiseHandshakeVectorsTest.kt`.
-      Check for existing published vectors covering this exact pattern (Noise-C / cacophony vector
-      files) before falling back to a generated-transcript cross-check against the Python
-      `noiseprotocol` library (fixed PSK, fixed non-random ephemeral keys, assert byte-for-byte
-      transcript match) — if that fallback is used, say so in the test file's header comment, since
-      it's a deviation from "published vectors."
+- [x] 5. `crypto/Noise.kt` — handshake state for exactly `Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s`
+      (`NoiseHandshake`, `NoiseCipherState`), built directly on `Curve25519`/`ChaCha20Poly1305`/
+      `Blake2s` rather than a general token-driven Noise engine, since no other pattern is needed.
+      Checked noise-c's and "cacophony"'s published vector sets first; neither covers `NNpsk0`
+      specifically (only plain `NN` or the differently-modified `NoisePSK_*` patterns), so
+      `NoiseHandshakeVectors.kt` cross-checks against a from-scratch Python reimplementation of the
+      Noise spec (built on already-vector-tested Python primitives, not on `python-noise`, which
+      isn't installable in this environment) — documented as such in the file header. Confirmed via
+      the Python source (`_dilation/connector.py`) that Dilation sets no Noise prologue (only the
+      separate plaintext `PROLOGUE_LEADER`/`PROLOGUE_FOLLOWER` line, which is not fed into Noise).
+      `NoiseHandshake` takes an injectable ephemeral-key generator so tests can pin the vectors'
+      fixed keys while real usage defaults to `randomBytes`.
 - [ ] 6. Dilation version negotiation: `dilation-v1` key derivation, `can-dilate`/`dilation-abilities`
       in the `version` mailbox phase, `please`/leader-follower decision over `dilate-0`. No TCP yet.
       Test against the existing `FakeMailboxServer`.
