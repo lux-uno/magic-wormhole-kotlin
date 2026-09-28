@@ -183,6 +183,12 @@ file 2 of 3 (existing error paths should still surface correctly per-file).
 
 ## 4. Dilation (large; treat this breakdown as a starting point, not a final plan)
 
+**Status: done, `internal`-only.** See [plans/dilation-implementation.md](dilation-implementation.md)
+for the full task-by-task record of what landed (the crypto primitives, connector, records,
+multiplexing, and reconnection) and two non-obvious concurrency bugs found along the way. No public
+API exists yet (§11 of that plan) — nothing in `wormhole-rift` calls it yet, so exposing one was
+deferred per AGENTS.md's "public API is small" principle rather than designed speculatively.
+
 ### What Python does
 
 Dilation (`wormhole._dilation`) replaces the one-shot Transit connection with a persistent,

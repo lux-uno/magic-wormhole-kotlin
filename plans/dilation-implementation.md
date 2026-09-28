@@ -1,6 +1,11 @@
 # Plan: implement Wormhole Dilation
 
-Status: in progress. Supersedes the phase list in
+Status: core protocol complete (tasks 1-11 below all done) and `internal`-only, matching the
+Python reference implementation's wire format. What's *not* built: a public API (task 11 explains
+why), and anything beyond what the Python implementation itself does (no resumable-file-transfer
+layer on top — see `close-python-feature-gaps.md` §5 for that, separate and still not started).
+
+Supersedes the phase list in
 [close-python-feature-gaps.md §4](close-python-feature-gaps.md), which now holds the research
 findings (message formats, wire framing, state machine) this plan implements. Read that section
 first if you need the "why" behind any wire format decision here.
@@ -126,9 +131,12 @@ it.
        Tests in `DilationManagerReconnectionTest.kt`: a plain drop-and-reconnect from either role,
        subchannel ids surviving a reconnect, and an unacked DATA record correctly resending after
        reconnect.
-- [ ] 11. Confirm whether a public API is warranted yet (lean internal-only per AGENTS.md's "small
-       public API" until a real caller exists — re-check this against whatever `wormhole-rift` needs
-       at the time).
+- [x] 11. Checked `wormhole-rift` (the sibling app repo) for any reference to Dilation — there is
+       none. No concrete caller exists yet, so per AGENTS.md's "public API is small" principle,
+       Dilation stays fully `internal` for now (no public `Wormhole` method exposes it). Revisit this
+       once a real feature (e.g. a persistent/dilated transfer mode, or a non-file-transfer use case)
+       needs it — at that point design the public surface around that caller's actual shape rather
+       than speculatively now.
 
 ## Conventions to follow (already established elsewhere in this repo)
 
