@@ -4,8 +4,10 @@ package uno.lux.wormhole
 
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
@@ -16,6 +18,12 @@ import uno.lux.wormhole.crypto.hkdfSha256
 import uno.lux.wormhole.crypto.randomBytes
 import uno.lux.wormhole.crypto.sha256
 import uno.lux.wormhole.rendezvous.RendezvousClient
+
+/** The "ged" value magic-wormhole's `can-dilate`/`use-version` fields use for Dilation. */
+internal const val DILATION_VERSION: String = "ged"
+
+/** [WormholeSession.deriveKey] purpose string for the key Dilation's Noise handshake uses as a PSK. */
+internal const val DILATION_KEY_PURPOSE: String = "dilation-v1"
 
 /**
  * The encrypted conversation between two sides on an open mailbox.
@@ -58,18 +66,37 @@ internal class WormholeSession(
             throw WormholeProtocolException("Invalid PAKE message from the other side", e)
         }
 
+    private var peerCanDilate: List<String> = emptyList()
+
     /** Both sides send an encrypted "version" message. If the peer's does not decrypt, the codes differ. */
     private suspend fun exchangeVersions() {
-        val versions = buildJsonObject { put("app_versions", buildJsonObject { }) }
+        val versions =
+            buildJsonObject {
+                put("app_versions", buildJsonObject { })
+                put("can-dilate", buildJsonArray { add(JsonPrimitive(DILATION_VERSION)) })
+                put(
+                    "dilation-abilities",
+                    buildJsonArray {
+                        add(buildJsonObject { put("type", "direct-tcp-v1") })
+                        add(buildJsonObject { put("type", "relay-v1") })
+                    },
+                )
+            }
         client.add("version", encrypt(client.side, "version", versions.toString().encodeToByteArray()))
 
-        val (peerSide, peerVersion) = receiveMessage("version")
-        try {
-            decrypt(peerSide, "version", peerVersion)
-        } catch (e: DecryptionException) {
-            throw WrongCodeException()
-        }
+        val (peerSide, peerVersionBody) = receiveMessage("version")
+        val peerVersion =
+            try {
+                parseJson(decrypt(peerSide, "version", peerVersionBody))
+            } catch (e: DecryptionException) {
+                throw WrongCodeException()
+            }
+        peerCanDilate =
+            (peerVersion["can-dilate"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content } ?: emptyList()
     }
+
+    /** Whether the peer's "version" message advertised support for [DILATION_VERSION]. */
+    fun peerSupportsDilation(): Boolean = DILATION_VERSION in peerCanDilate
 
     fun deriveKey(
         purpose: String,
@@ -78,15 +105,29 @@ internal class WormholeSession(
 
     internal fun keyForTests(): ByteArray = requireKey()
 
+    private var nextOutboundDilationPhase = 0
+    private var nextInboundDilationPhase = 0
+
     /** Encrypts and sends [message] as the next numbered phase. */
-    suspend fun send(message: JsonObject) {
-        val phase = (nextOutboundPhase++).toString()
+    suspend fun send(message: JsonObject) = sendPhase((nextOutboundPhase++).toString(), message)
+
+    /** Receives and decrypts the next numbered phase from the other side. */
+    suspend fun receive(): JsonObject = receivePhaseAsJson((nextInboundPhase++).toString())
+
+    /** Encrypts and sends [message] as the next `dilate-N` phase (a separate sequence from [send]). */
+    suspend fun sendDilation(message: JsonObject) = sendPhase("dilate-${nextOutboundDilationPhase++}", message)
+
+    /** Receives and decrypts the next `dilate-N` phase from the other side (a separate sequence from [receive]). */
+    suspend fun receiveDilation(): JsonObject = receivePhaseAsJson("dilate-${nextInboundDilationPhase++}")
+
+    private suspend fun sendPhase(
+        phase: String,
+        message: JsonObject,
+    ) {
         client.add(phase, encrypt(client.side, phase, message.toString().encodeToByteArray()))
     }
 
-    /** Receives and decrypts the next numbered phase from the other side. */
-    suspend fun receive(): JsonObject {
-        val phase = (nextInboundPhase++).toString()
+    private suspend fun receivePhaseAsJson(phase: String): JsonObject {
         val (side, body) = receiveMessage(phase)
         val plaintext =
             try {

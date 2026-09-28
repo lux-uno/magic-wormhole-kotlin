@@ -55,9 +55,16 @@ it.
       separate plaintext `PROLOGUE_LEADER`/`PROLOGUE_FOLLOWER` line, which is not fed into Noise).
       `NoiseHandshake` takes an injectable ephemeral-key generator so tests can pin the vectors'
       fixed keys while real usage defaults to `randomBytes`.
-- [ ] 6. Dilation version negotiation: `dilation-v1` key derivation, `can-dilate`/`dilation-abilities`
-      in the `version` mailbox phase, `please`/leader-follower decision over `dilate-0`. No TCP yet.
-      Test against the existing `FakeMailboxServer`.
+- [x] 6. Dilation version negotiation: `WormholeSession.exchangeVersions()` now sends
+      `can-dilate`/`dilation-abilities` and records the peer's `can-dilate`
+      (`peerSupportsDilation()`); `sendDilation`/`receiveDilation` add a separate `dilate-N` phase
+      sequence alongside the existing numbered one, sharing the same encrypt/decrypt machinery
+      (confirmed against `_key.py`/`_send.py` that Python derives the `dilate-N` phase key exactly
+      like any other phase, keyed by the phase string and the *mailbox* side — not the
+      dilation-specific side). `dilation.DilationManager` sends/receives the `please` exchange and
+      decides Leader/Follower by comparing the 8-byte-hex dilation `side` values (own side
+      injectable for deterministic tests, defaults to random). No TCP yet. Tested against
+      `FakeMailboxServer` in `DilationManagerTest.kt`.
 - [ ] 7. `dilation/DilationHints.kt` + `dilation/DilationConnector.kt`: hint dial/accept on
       `transit/TcpTransitNetwork`'s `TransitNetwork`/`TransitSocket`/`TransitListener`, prologue and
       relay-handshake lines, Noise handshake per candidate, KCM exchange, first-viable-wins

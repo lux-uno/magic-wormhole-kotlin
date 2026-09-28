@@ -31,3 +31,8 @@ Direct and relay TCP connections, and encrypted records. Internal.
 # Package uno.lux.wormhole.zip
 
 Zip archive reading and writing for folder transfers. Internal.
+
+# Package uno.lux.wormhole.dilation
+
+Dilation: the mailbox-level version/role negotiation is implemented; the multiplexed reconnectable
+connection itself is not yet. Internal.
