@@ -96,10 +96,36 @@ it.
       is the manager-level surface for now; build the richer subchannel object once something needs
       it. Tests reuse `transit/FakeInternet.kt` again; a same-instant reconnection swap (moving
       unretired queue entries to a new connection) is task 10's job, not this one.
-- [ ] 10. Reconnection: full `DilationManager` state machine (table in
-       `close-python-feature-gaps.md §4`), ping/pong liveness timer, `reconnect`/`reconnecting`
-       handshake, resend of the unretired queue on the new connection. Test: drop the fake connection
-       mid-session, assert unacked records resend in order.
+- [x] 10. Reconnection: `DilationManager` now runs a persistent `lifecycleLoop` (launched once from
+       `connect()`) that establishes a connection, runs it until lost, handles the loss per
+       `close-python-feature-gaps.md §4`'s state table (Leader always FLUSHING→send `reconnect`→wait
+       `reconnecting`; Follower LONELY→wait `reconnect`→send `reconnecting` if its own connection died
+       first, or ABANDONING→close its still-good connection→send `reconnecting` if the Leader's
+       `reconnect` arrives while still connected), then reconnects — forever. A single-consumer
+       `dilateReaderLoop` feeds every `dilate-N` message into a channel so the "waiting for a specific
+       control message" logic never races with `WormholeSession`'s per-phase counter. The Leader-only
+       ping/pong liveness timer (`pingInterval`, default 30s) sends a `PING` each idle interval and
+       force-closes the connection if a second interval passes with no traffic. `resendUnretiredQueue`
+       replays not-yet-acked OPEN/DATA/CLOSE on the new connection, in order, before new writes.
+
+       Two real bugs found and fixed while getting this to pass against `FakeInternet`, both worth
+       remembering:
+       1. `kotlinx.coroutines.selects.select` combining a `Deferred.onAwait` with a
+          `Channel.onReceive` clause silently never fired the channel clause in this scenario, even
+          with a value already sitting in the channel and no other consumer — root cause not fully
+          identified. Replaced with an explicit `CompletableDeferred` + two `launch`ed racer
+          coroutines (mirroring `DilationConnector.ConnectionRace`'s style), which works reliably.
+          Avoid `select` here again without a minimal reproduction confirming it's fixed upstream.
+       2. `readLoop`'s try/catch originally wrapped only `connection.receiveRecord()`, not the record
+          handling that follows. A record can be read successfully and then fail to *ACK* (the peer's
+          read half died but the write half hadn't yet, or vice versa) — that failure was propagating
+          uncaught out of the `launch`, silently cancelling the whole `coroutineScope` (including the
+          Follower's reconnect-signal watcher) with no readable error at the call site. Fixed by
+          guarding the entire per-record iteration, not just the read.
+
+       Tests in `DilationManagerReconnectionTest.kt`: a plain drop-and-reconnect from either role,
+       subchannel ids surviving a reconnect, and an unacked DATA record correctly resending after
+       reconnect.
 - [ ] 11. Confirm whether a public API is warranted yet (lean internal-only per AGENTS.md's "small
        public API" until a real caller exists — re-check this against whatever `wormhole-rift` needs
        at the time).
