@@ -208,42 +208,165 @@ reconnectable, multiplexed channel opened once per wormhole session. It adds:
 
 There is no equivalent of the `spake2`/`nacl` test-vector story for Dilation — it is a framing and
 session-management protocol, not primarily a cryptographic primitive, though it does layer new
-per-subchannel keys derived the same HKDF way as everything else here. The main risk is protocol
-fidelity (getting the message shapes and state machine right against a moving, under-documented
-target), not crypto correctness.
+per-subchannel keys derived the same HKDF way as everything else here, and it does require a Noise
+Protocol handshake (a cryptographic primitive this library does not have at all yet — see below).
+The main risk is protocol fidelity (getting the message shapes and state machine right), *and* the
+absence of X25519/ChaCha20-Poly1305/BLAKE2s/Noise in this codebase.
 
-### Suggested phases
+### Research spike findings (read `wormhole/_dilation/*.py` + `docs/dilation-protocol.rst` end to end)
 
-1. **Spike: read the protocol, don't write library code yet (2–3 days).** Read
-   `wormhole/_dilation/*.py` in the Python source end to end, and any protocol doc that ships with
-   it (`docs/dilation-protocol.md` if present in the version being targeted). Write up, as a
-   revision of this plan section, the actual message formats, the leader/follower decision rule,
-   and the subchannel framing — this plan cannot specify them correctly without that reading, and
-   guessing would violate the "never invent crypto/protocol" spirit of AGENTS.md's crypto rule even
-   though Dilation is framing rather than a cipher.
-2. **Land the mailbox-level version negotiation** as its own small, testable piece: exchange the
-   dilation-versions message, agree on a version, and expose which side is leader — with no actual
-   dilated connection yet. This is testable against the existing in-memory `RendezvousTransport`
-   the same way the current PAKE exchange is tested.
-3. **Land a bare single-subchannel dilated connection** (open, send bytes, close) reusing as much
-   of `transit/TcpTransitNetwork.kt`'s platform connection code as fits, before adding
-   multiplexing.
-4. **Add multiplexing and reconnection** once (3) is solid — reconnection is the part most likely to
-   need careful state-machine tests (drop the connection mid-transfer in a test, assert the
-   transfer resumes).
-5. **Expose a public API.** Decide then whether this becomes a new `Wormhole` method (e.g. a raw
-   bidirectional stream API distinct from `sendFile`/`receive`) or stays internal until a concrete
-   use case (this library has none yet — no app in this repo's scope needs `wormhole ssh`-style
-   sessions) asks for one. Given AGENTS.md's "public API is small," lean toward not exposing
-   anything publicly until a real caller exists.
-6. **Interop-test against the real `wormhole` CLI** (`WORMHOLE_INTEROP=1 ./gradlew jvmTest`) once a
-   tool on the Python side actually uses Dilation to test against — confirm one exists and is
-   reachable before committing to this step.
+The spike below replaces step 1 of the original phase breakdown; the formats and state machine here
+are read directly from the reference implementation (not the older, slightly-aspirational protocol
+doc — where the two disagree, the code is authoritative and is what's recorded here).
+
+**Version negotiation (mailbox `version` phase, before any dilate-n phase exists).** Each side's
+encrypted `version` message gains two keys: `"can-dilate": ["ged"]` (the *only* version string the
+current reference implementation supports — not `"1"`, despite an older doc draft; must match
+exactly for interop) and `"dilation-abilities": [{"type":"direct-tcp-v1"},{"type":"relay-v1"}]`.
+Both sides intersect their `can-dilate` lists; empty intersection is a hard failure
+(`OldPeerCannotDilateError`). `dilation_key = HKDF-SHA256(mainKey, info=b"dilation-v1", length=32)`
+(no salt) — derived once from the main PAKE key and reused unchanged for the whole session,
+including every reconnect attempt (only the ephemeral Noise keys change per attempt, not this PSK).
+
+**Control channel over the mailbox.** Separate phases named `dilate-0`, `dilate-1`, `dilate-2`, ...
+(a per-side monotonic counter), each an encrypted JSON dict with a `"type"` field, delivered to the
+receiver strictly in phase-number order (buffer and reorder if the mailbox delivers out of order).
+Message shapes:
+- `{"type": "please", "side": "<8-byte-hex-string>", "use-version": "ged"}` — `side` here is a
+  **separate** random value from the mailbox `side`, freshly generated per wormhole for Dilation
+  specifically (8 random bytes, hex-encoded). Sent by both peers as soon as their own `dilate()` is
+  called and their own version/dilation-key are known.
+- `{"type": "connection-hints", "hints": [...]}` — see hint shapes below.
+- `{"type": "reconnect"}` — Leader-only, signals "my connection died, starting a new generation."
+- `{"type": "reconnecting"}` — Follower-only, sent in reply once the Follower has torn down its own
+  side and is ready for the new generation.
+
+**Leader/Follower.** On receiving the peer's `please`, compare the two 8-byte-hex `side` strings
+lexicographically: the **higher** string is Leader, the lower is Follower (equal is a fatal
+"reflection" error — should not happen since sides are independently random). Leader allocates
+subchannel ids as odd numbers starting at 1 (`1, 3, 5, ...`); Follower as even numbers starting at 2
+(`2, 4, 6, ...`); subchannel id `0` is reserved and is the always-open control channel, available
+the moment the first L2 connection is selected (no OPEN record needed for it).
+
+**Hints.** Two JSON shapes, sent inside `connection-hints`:
+- Direct: `{"type": "direct-tcp-v1", "priority": <float>, "hostname": "<str>", "port": <int>}`.
+- Relay: `{"type": "relay-v1", "hints": [<direct hint dicts of the relay's own address(es)>]}`.
+(A `tor-tcp-v1` type exists conceptually in the Python code's data model but is never advertised by
+default and is out of scope here.) These are a **different wire shape from `transit/Hints.kt`'s
+`"hints-v1"`/`DirectHint`** — do not reuse that type, write a parallel one. Direct hints are dialled
+immediately, all in parallel, no staggering. A configured relay is dialled too, but only after a
+fixed `2.0s` delay *if* at least one direct hint exists and direct listening isn't disabled
+(`RELAY_DELAY = 2.0`); this is the only fixed timing constant in connection establishment.
+
+**Per-connection wire protocol (L2), in order, for every candidate TCP connection (dialled or
+accepted):**
+1. *(relay-dialled connections only)* send ASCII line `"please relay " + hex(HKDF(dilation_key, 32,
+   info=b"transit_relay_token")) + " for side " + side + "\n"`; the relay must reply with exactly
+   `"ok\n"` before continuing, otherwise disconnect.
+2. **Prologue** (every connection, both directions): Leader sends
+   `"Magic-Wormhole Dilation Handshake v1 Leader\n\n"`; Follower sends
+   `"Magic-Wormhole Dilation Handshake v1 Follower\n\n"`. Each side expects to *read* the other
+   role's exact prologue line back; any mismatch (including an unrelated TCP server accidentally
+   reached via a bad hint) is an immediate disconnect, no error surfaced to the app.
+3. **Framing from here on**: `4-byte big-endian length` + payload, one Noise message per frame.
+4. **Noise handshake**, pattern **`Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s`**: `NN` = no static keys
+   exchanged, `psk0` = the PSK (`dilation_key`) is mixed into the *first* handshake message,
+   `25519` = X25519 DH, `ChaChaPoly` = ChaCha20-Poly1305 AEAD, `BLAKE2s` = hash/HKDF function. Leader
+   is Noise initiator (sends message 1: `-> psk, e`); Follower is responder (reads it, replies with
+   message 2: `<- e, ee`). No handshake payloads are used (empty payload both messages).
+5. **KCM (Key Confirmation Message)** = an empty Noise transport message, wire tag `0x00`
+   (see record tags below). Immediately after completing its side of the handshake, the **Follower**
+   sends a KCM. The **Leader does not send a KCM yet** — for each candidate connection it waits to
+   *receive* a KCM (proof the peer had the right PSK, i.e. the right wormhole code) before treating
+   that connection as viable. Current reference-implementation selection policy is **first viable
+   connection wins** (no scoring despite the older protocol doc describing one) — once the Leader
+   accepts a winner, it sends its *own* KCM on that connection only, and drops every other
+   candidate (dialled-but-not-yet-viable, or viable-but-not-chosen). The Follower learns which
+   connection won purely by which one receives the Leader's KCM; it drops all others.
+
+**Record tags** (1 byte, prefixing Noise plaintext, exact field layout is the ground truth to
+replicate byte-for-byte):
+```
+KCM   = 0x00                                            (no body)
+PING  = 0x01   ping_id:4B
+PONG  = 0x02   ping_id:4B                                (echo of the PING's id)
+OPEN  = 0x03   scid:4B-BE  seqnum:4B-BE  subprotocol:UTF-8 (rest of payload)
+DATA  = 0x04   scid:4B-BE  seqnum:4B-BE  payload:bytes   (rest of payload)
+CLOSE = 0x05   scid:4B-BE  seqnum:4B-BE
+ACK   = 0x06   resp_seqnum:4B-BE
+```
+Noise per-message plaintext limit is `65535 - 16 = 65519` bytes (16-byte Poly1305 tag overhead,
+ciphertext capped at `65535`); a record whose payload exceeds this is split into multiple
+consecutive Noise ciphertexts concatenated inside one outer length-prefixed frame. There is no KCP
+or other multiplexing transport underneath — plain TCP with this custom framing on top.
+
+**Reliability / ACK / resend.** `seqnum` is per-direction, monotonically increasing, assigned only
+to OPEN/DATA/CLOSE (not ACK/PING/PONG/KCM), starting at 0. Every inbound OPEN/DATA/CLOSE is ACKed
+immediately regardless of whether it turns out to be a duplicate. The receiver tracks a single
+watermark (`highest_inbound_acked`, updated via `max()`); any inbound record with
+`seqnum <= watermark` is dropped (after re-ACKing) — this is what gives in-order, at-most-once
+delivery without needing per-subchannel sequence tracking. The sender keeps every OPEN/DATA/CLOSE it
+has sent in an outbound queue until it is retired by a matching ACK (`resp_seqnum >= seqnum`,
+pop-from-front since acks are cumulative in practice via the max-based watermark on the far side).
+When a new L2 connection is selected (initial or after reconnect), the *entire* not-yet-acked queue
+is resent, in original order, before any newly-queued write is allowed out — this queue-and-resend
+behavior, not anything generation-specific, is what makes the channel durable across reconnects.
+PING/PONG/ACK/KCM are fire-and-forget, never queued, silently dropped if no connection is currently
+up.
+
+**Reconnection triggers and roles.** Only the Leader runs a liveness timer: on the winning
+connection, sends a `PING` (4 random bytes) every `30.0s` of otherwise-idle time and expects a
+`PONG` echo; missing two consecutive intervals with no traffic (ping or otherwise) is "connection
+dead," at which point the Leader disconnects and sends `{"type":"reconnect"}` over the mailbox
+control channel, entering a `FLUSHING`-equivalent wait for the Follower's `{"type":"reconnecting"}`
+before starting a fresh connection-establishment round (a new "generation" — no generation number is
+ever transmitted; ordering is implicit in the dilate-n phase sequence and the reconnect/reconnecting
+handshake). The Follower never initiates reconnection on its own: if it notices its connection died
+first, it just waits (does not send anything) until the Leader's `reconnect` arrives; if the Leader
+sends `reconnect` while the Follower's own connection still looks fine, the Follower forcibly tears
+its own connection down first, *then* replies `reconnecting`. Every new connection reuses the same
+`dilation_key` PSK; hint exchange (a fresh `connection-hints` message) happens again per generation.
+
+**Manager state machine** (mirror this as a Kotlin sealed-state machine):
+
+| From | Event | To | Notes |
+|---|---|---|---|
+| WAITING | start (app calls dilate) | WANTING | send `please` |
+| WANTING | received peer's `please` | CONNECTING | decide leader/follower, start connecting |
+| CONNECTING | a connection is selected | CONNECTED | — |
+| CONNECTED | (Leader) connection lost | FLUSHING | send `reconnect` |
+| FLUSHING | received `reconnecting` | CONNECTING | start new generation |
+| CONNECTED | (Follower) connection lost | LONELY | wait passively |
+| LONELY | received `reconnect` | CONNECTING | send `reconnecting`, start new generation |
+| CONNECTED | (Follower) received `reconnect` while still connected | ABANDONING | disconnect own connection first |
+| ABANDONING | own connection now lost | CONNECTING | send `reconnecting`, start new generation |
+| CONNECTING | received `reconnect` (rare/self-loop) | CONNECTING | stop current attempt, restart generation |
+| any of WAITING/WANTING/CONNECTING/CONNECTED/FLUSHING/LONELY/ABANDONING | stop (app/session tears down) | STOPPED (via STOPPING while a connection is being torn down) | — |
+| WANTING/CONNECTING (both roles) | `connection-hints` received | (same state) | too-early hints ignored in WANTING, applied (raced) in CONNECTING; ignored everywhere later (stale) |
+
+None of this exists in the Kotlin library yet, and neither does any of the crypto it depends on:
+there is no X25519, no ChaCha20-Poly1305, no BLAKE2s, and no Noise handshake state machine anywhere
+in `uno.lux.wormhole.crypto` today (`Ed25519.kt`/`SecretBox.kt` are unrelated: Edwards signing for
+SPAKE2 and NaCl XSalsa20-Poly1305 for Transit). Per AGENTS.md's crypto rule, each of these needs a
+from-scratch implementation checked against independently-published test vectors (RFC 7748 for
+X25519, RFC 8439 for ChaCha20-Poly1305, RFC 7693 for BLAKE2s) before the Noise handshake — and
+everything above it — can be trusted; see `plans/dilation-implementation.md` for how this is broken
+into commits.
+
+### Suggested phases (superseded by `plans/dilation-implementation.md`, kept here for history)
+
+1. ~~Spike: read the protocol, don't write library code yet~~ — done, findings recorded above.
+2. Land the mailbox-level version negotiation, leader/follower decision, no TCP yet.
+3. Land a bare single-subchannel dilated connection reusing `transit/TcpTransitNetwork.kt`.
+4. Add multiplexing and reconnection.
+5. Decide on public API exposure (lean toward staying internal until a real caller exists).
+6. Interop-test against the real `wormhole` CLI once Dilation-using Python tooling is reachable.
 
 ### Estimate
 
 Weeks, not days — plan for this to be its own multi-PR effort with its own commits per AGENTS.md's
-"one task, one commit," not a single pass through this repo.
+"one task, one commit," not a single pass through this repo. See `plans/dilation-implementation.md`
+for the active, step-by-step breakdown (crypto primitives first, then protocol layers).
 
 ---
 
