@@ -37,8 +37,12 @@ it.
       library (same rationale as the X25519 vectors: avoids hand-transcription errors from the RFC
       text), covering empty/short/AAD-only/unaligned/multi-block cases plus tamper and wrong-AAD
       rejection tests.
-- [ ] 4. `crypto/Blake2s.kt` — hash (RFC 7693). Test first: `Blake2sVectorsTest.kt` using RFC 7693's
-      vectors plus the official BLAKE2 test vector file if more coverage is wanted.
+- [x] 4. `crypto/Blake2s.kt` — unkeyed BLAKE2s with the fixed 32-byte digest Noise needs (`blake2s`),
+      plus `hmacBlake2s` (RFC 2104 HMAC over it, 64-byte block size) for Noise's `HMAC-HASH`. Scoped
+      to unkeyed hashing only — Noise never uses BLAKE2s's native key parameter, so that path was
+      left out rather than built and left untested. Vectors in `Blake2sVectors.kt` come from Python's
+      `hashlib.blake2s`/`hmac`; the `"abc"` digest matches the well-known published BLAKE2s-256
+      test value as a cross-check.
 - [ ] 5. `crypto/Noise.kt` — minimal handshake state for exactly `Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s`
       (not a general Noise engine), built on tasks 2-4. Test first: `NoiseHandshakeVectorsTest.kt`.
       Check for existing published vectors covering this exact pattern (Noise-C / cacophony vector
