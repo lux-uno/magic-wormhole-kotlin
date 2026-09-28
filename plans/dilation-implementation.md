@@ -65,13 +65,24 @@ it.
       decides Leader/Follower by comparing the 8-byte-hex dilation `side` values (own side
       injectable for deterministic tests, defaults to random). No TCP yet. Tested against
       `FakeMailboxServer` in `DilationManagerTest.kt`.
-- [ ] 7. `dilation/DilationHints.kt` + `dilation/DilationConnector.kt`: hint dial/accept on
-      `transit/TcpTransitNetwork`'s `TransitNetwork`/`TransitSocket`/`TransitListener`, prologue and
-      relay-handshake lines, Noise handshake per candidate, KCM exchange, first-viable-wins
-      selection. Test against a new `FakeDilationNetwork` (in-memory, styled like
-      `transit/FakeInternet.kt`).
-- [ ] 8. `dilation/DilationRecord.kt`: record tag encode/decode + 4-byte length framer. Get one
-      control-channel connection fully established end to end (Leader ↔ Follower, real bytes).
+- [x] 7-8 (merged). `dilation/DilationHint.kt`, `dilation/DilationConnection.kt` (4-byte-length
+      framer + KCM), `dilation/DilationConnector.kt`: hint dial/accept reusing
+      `transit/Transit.kt`'s `TransitNetwork`/`TransitSocket`/`TransitListener` interfaces directly
+      (no new network abstraction needed), prologue exchange, and the relay handshake line —
+      reusing `transit.Handshakes.relay()`/`RELAY_OK` as-is, since Dilation's relay token uses the
+      exact same `"transit_relay_token"` HKDF purpose string as Transit's (confirmed against
+      `connector.py`/`_hints.py`). Per-candidate: Noise handshake (Leader = initiator, Follower =
+      responder), then the KCM exchange exactly as `connection.py`'s `dataReceived` drives it
+      (Follower sends a KCM unconditionally right after its handshake half completes; every
+      candidate — either role — waits to receive an inbound KCM before it's considered viable;
+      first-viable-wins; only the Leader additionally sends its own KCM, and only on the winning
+      connection, which is what tells the Follower which one won). Reused `transit/FakeInternet.kt`
+      directly for tests (no new fake network needed, since `TransitNetwork` is exactly the
+      interface it already implements) — covers direct-hint success, relay-only success, a raced
+      direct+relay double-success (exactly one winner), a prologue-mismatching impostor, and a
+      wrong-PSK Noise failure. Folded 7 and 8 into one task since KCM/selection and the framing it
+      rides on aren't meaningfully separable — you can't test "first viable wins" without the KCM
+      exchange that defines viability.
 - [ ] 9. `dilation/DilationSubchannel.kt` + subchannel support in `DilationManager.kt`: OPEN/DATA/CLOSE,
       scid allocation by role, buffering for data arriving before a consumer attaches, ACK watermark,
       outbound retry queue.

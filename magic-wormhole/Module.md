@@ -34,5 +34,6 @@ Zip archive reading and writing for folder transfers. Internal.
 
 # Package uno.lux.wormhole.dilation
 
-Dilation: the mailbox-level version/role negotiation is implemented; the multiplexed reconnectable
-connection itself is not yet. Internal.
+Dilation: mailbox-level version/role negotiation, connection hints, and racing/selecting one L2
+TCP connection (direct or relayed, Noise-handshaked). Multiplexing and reconnection are not yet
+implemented. Internal.
